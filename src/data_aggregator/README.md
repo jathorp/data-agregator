@@ -29,7 +29,8 @@ flowchart TD
     CW["CloudWatch"]
   end
 
-  ExternalParty -->|"1. Upload"| S3
+  %% ───────── Edges ─────────
+  ExternalParty -->|"1. Uploads files (HTTPS)"| S3
 
 ```
 

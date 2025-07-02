@@ -77,7 +77,7 @@ flowchart TD
   Lambda        -->|"4. Checks & updates keys"| DynamoDB
   Lambda        -->|"5. Downloads files"| S3
   SecretsManager-->|"6. Provides credentials"| Lambda
-  Lambda        -.->|"7. Pushes metrics"| CloudWatch
+  Lambda        -->|"7. Pushes metrics"| CloudWatch
   Lambda        -->|"8. Pushes batch (via private network)"| MinIO
   SQS           -->|"Persistent Failure"| DLQ
 

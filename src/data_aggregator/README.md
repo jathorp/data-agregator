@@ -30,7 +30,7 @@ flowchart TD
   end
 
   %% ───────── Edges ─────────
-  ExternalParty -->|"1. Uploads files (HTTPS)"| S3
+  ExternalParty -->|"Uploads files (HTTPS)"| S3
 
 ```
 

@@ -8,3 +8,13 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Terraform files
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+
+# Build artifacts
+lambda_package.zip

@@ -5,8 +5,8 @@ These functions are designed to be "pure" and testable. They receive all
 dependencies, including the Powertools logger, from the main handler in app.py,
 allowing them to be unit-tested in isolation.
 """
-
-from urllib.parse import unquote_plus
+import hashlib
+from urllib.parse import unquote
 
 from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
@@ -49,29 +49,31 @@ def is_object_unique(
     """
     # The ObjectID is a combination of the bucket and key to ensure it's globally unique.
     # We must unquote the key to handle special characters like spaces (%20).
-    object_id = unquote_plus(s3_key)
+    object_id = unquote(s3_key)
+
+    # Create a hex hash prefix (e.g., 'a4f1') from the object_id to ensure
+    # writes are distributed evenly across DynamoDB's physical partitions.
+    hash_prefix = hashlib.sha1(object_id.encode()).hexdigest()[:4]
+    sharded_object_id = f"{hash_prefix}#{object_id}"
 
     try:
-        # Attempt to write the object's ID to the table.
-        # The ConditionExpression ensures this write only succeeds if the
-        # ObjectID does not already exist.
         ddb_table.put_item(
             Item={
-                "ObjectID": object_id,
+                # FIX: Use the new sharded key as the partition key.
+                "ObjectID": sharded_object_id,
                 "ExpiresAt": ttl,
-                "SQSMessageID": message_id,  # Store for audit purposes
+                "SQSMessageID": message_id,
             },
             ConditionExpression="attribute_not_exists(ObjectID)",
         )
-        # If we reach here, the write succeeded, and the key is new.
-        logger.info(f"New unique object key registered: {object_id}")
+        # FIX: Log the sharded key.
+        logger.info(f"New unique object key registered: {sharded_object_id}")
         return True
     except ClientError as e:
-        # This specific error code is EXPECTED for duplicate messages.
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            logger.info(f"Duplicate object key detected: {object_id}")
+            # FIX: Log the sharded key.
+            logger.info(f"Duplicate object key detected: {sharded_object_id}")
             return False
         else:
-            # Any other database error is unexpected and should fail the function.
             logger.exception("Unexpected DynamoDB error during idempotency check.")
             raise

@@ -10,19 +10,16 @@ import os
 from typing import cast
 
 import boto3
-from botocore.config import Config, _RetryDict
-
-from mypy_boto3_s3 import S3Client
-from mypy_boto3_sqs import SQSClient
+from botocore.config import Config
 from mypy_boto3_dynamodb.service_resource import DynamoDBServiceResource
+from mypy_boto3_s3 import S3Client
 from mypy_boto3_secretsmanager import SecretsManagerClient
-
+from mypy_boto3_sqs import SQSClient
 
 logger = logging.getLogger(__name__)
 
-# Shared retry config
 BOTO_CONFIG_RETRYABLE = Config(
-    retries=cast(_RetryDict, {"max_attempts": 5, "mode": "adaptive"})
+    retries={'max_attempts': 5, 'mode': 'adaptive'}  # type: ignore[arg-type]
 )
 
 
@@ -38,18 +35,31 @@ def get_boto_clients() -> tuple[
     if not aws_region:
         logger.warning("AWS_REGION not set; boto3 will resolve a default region.")
 
+    # FIX: Moto safety guardrail now checks for any env starting with "prod".
     if os.environ.get("USE_MOTO"):
+        environment = os.environ.get("ENVIRONMENT", "dev")
+        if environment.startswith("prod"):
+            raise EnvironmentError(
+                "FATAL: USE_MOTO cannot be enabled in a production environment."
+            )
         logger.info("MOTO ENABLED: returning mocked AWS clients.")
 
-    # `boto3` returns generic clients. We use `cast` to inform the type checker
-    # of the specific client type we know we are creating.
-    s3_client = cast(S3Client, boto3.client("s3", region_name=aws_region))
-    sqs_client = cast(SQSClient, boto3.client("sqs", region_name=aws_region))
+    # The region is now handled by the session, simplifying client creation.
+    session = boto3.Session(region_name=aws_region)
+
+    s3_client = cast(
+        S3Client, session.client("s3", config=BOTO_CONFIG_RETRYABLE)
+    )
+    sqs_client = cast(
+        SQSClient, session.client("sqs", config=BOTO_CONFIG_RETRYABLE)
+    )
     dynamodb_resource = cast(
-        DynamoDBServiceResource, boto3.resource("dynamodb", region_name=aws_region)
+        DynamoDBServiceResource,
+        session.resource("dynamodb", config=BOTO_CONFIG_RETRYABLE),
     )
     secretsmanager_client = cast(
-        SecretsManagerClient, boto3.client("secretsmanager", region_name=aws_region)
+        SecretsManagerClient,
+        session.client("secretsmanager", config=BOTO_CONFIG_RETRYABLE),
     )
 
     return (

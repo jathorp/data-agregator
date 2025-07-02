@@ -26,15 +26,15 @@ flowchart TD
     end
 
     %% ───────── Edges ─────────
-    ExternalParty -->| "1\. Uploads files (HTTPS)" | S3
-    S3            -->| "2\. Event notification"  | SQS
+    ExternalParty -->| "1 - Uploads files (HTTPS)" | S3
+    S3            -->| "2 - Event notification"  | SQS
     SQS           --  "Auto-scales based on queue depth"  --> Lambda
-    Lambda        -->| "3\. Triggered with batch" | SQS
-    Lambda        -->| "4\. Checks & updates keys" | DynamoDB
-    Lambda        -->| "5\. Downloads files" | S3
-    SecretsManager -->| "6\. Provides credentials" | Lambda
-    Lambda        -->| "7\. Pushes metrics" | CloudWatch
-    Lambda        -->| "8\. Pushes batch (via private network)" | MinIO
+    Lambda        -->| "3 - Triggered with batch" | SQS
+    Lambda        -->| "4 - Checks & updates keys" | DynamoDB
+    Lambda        -->| "5 - Downloads files" | S3
+    SecretsManager -->| "6 - Provides credentials" | Lambda
+    Lambda        -->| "7 - Pushes metrics" | CloudWatch
+    Lambda        -->| "8 - Pushes batch (via private network)" | MinIO
     SQS           -->| "Persistent failure" | DLQ
 
     %% ───────── Styling ─────────

@@ -58,6 +58,7 @@ flowchart TD
   subgraph "On-Premise Data Center"
     MinIO["fa:fa-hdd<br/>MinIO Instance"]
   end
+  
   subgraph "AWS Cloud (eu-west-2)"
     Lambda["fa:fa-microchip<br/>Aggregator Lambda"]
     ExternalParty["External Party"] 

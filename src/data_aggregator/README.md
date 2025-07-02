@@ -8,6 +8,7 @@ This document provides a detailed overview of the pipeline's code structure, des
 
 The system is a fully serverless, event-driven pipeline on AWS. It ingests a high volume of small files from S3, uses an SQS queue to decouple ingestion from processing, and triggers a Lambda function to perform idempotent aggregation and secure delivery to an on-premise MinIO instance.
 
+```mermaid
 flowchart TD
   %% --- Nodes ---
   subgraph "On-Premise Data Center"
@@ -42,6 +43,7 @@ flowchart TD
   style SQS    fill:#FF4F8B,stroke:#333,stroke-width:2px
   style DynamoDB fill:#4DA4DB,stroke:#333,stroke-width:2px
   style DLQ    fill:#CC0000,stroke:#333,stroke-width:2px
+```
 
 -----
 

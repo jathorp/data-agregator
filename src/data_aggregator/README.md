@@ -10,39 +10,43 @@ The system is a fully serverless, event-driven pipeline on AWS. It ingests a hig
 
 ```mermaid
 flowchart TD
-  %% --- Nodes ---
-  subgraph "On-Premise Data Center"
-    MinIO["fa:fa-hdd<br/>MinIO Instance"]
-  end
+    %% ───────── Nodes ─────────
+    subgraph "On-Premise Data Center"
+        MinIO["MinIO Instance"]
+    end
+    subgraph "AWS Cloud (eu-west-2)"
+        SecretsManager["Secrets Manager"]
+        Lambda["Aggregator Lambda"]
+        ExternalParty[External Party]
+        S3["S3 Bucket"]
+        SQS["SQS Queue"]
+        DLQ["Dead-Letter Queue"]
+        DynamoDB["Idempotency Table"]
+        CloudWatch["CloudWatch<br/>Metrics & Alarms"]
+    end
 
-  subgraph "AWS Cloud (eu-west-2)"
-    Lambda["fa:fa-microchip<br/>Aggregator Lambda"]
-    S3["fa:fa-database<br/>S3 Landing Bucket"]
-    SQS["fa:fa-list-alt<br/>Ingestion Queue"]
-    DLQ["fa:fa-exclamation-triangle<br/>Dead-Letter Queue"]
-    DynamoDB["fa:fa-table<br/>Idempotency Table"]
-    SecretsManager["fa:fa-key<br/>MinIO Credentials"]
-    CloudWatch["fa:fa-chart-bar<br/>CloudWatch Metrics & Alarms"]
-  end
+    %% ───────── Edges ─────────
+    ExternalParty -->| "1\. Uploads files (HTTPS)" | S3
+    S3            -->| "2\. Event notification"  | SQS
+    SQS           --  "Auto-scales based on queue depth"  --> Lambda
+    Lambda        -->| "3\. Triggered with batch" | SQS
+    Lambda        -->| "4\. Checks & updates keys" | DynamoDB
+    Lambda        -->| "5\. Downloads files" | S3
+    SecretsManager -->| "6\. Provides credentials" | Lambda
+    Lambda        -->| "7\. Pushes metrics" | CloudWatch
+    Lambda        -->| "8\. Pushes batch (via private network)" | MinIO
+    SQS           -->| "Persistent failure" | DLQ
 
-  %% --- Edges (Links) ---
-  "External Party" -->|"1 - Uploads files (HTTPS)"| S3
-  S3            -->|"2 - Event Notification"| SQS
-  SQS           -- "Auto-scales based on queue depth" --> Lambda
-  Lambda        -->|"3 - Triggered with batch"| SQS
-  Lambda        -->|"4 - Checks & updates keys"| DynamoDB
-  Lambda        -->|"5 - Downloads files"| S3
-  SecretsManager-->|"6 - Provides credentials"| Lambda
-  Lambda        -.->|"7 - Pushes metrics"| CloudWatch
-  Lambda        -->|"8 - Pushes archive (via private network)"| MinIO
-  SQS           -->|"Persistent Failure"| DLQ
+    %% ───────── Styling ─────────
+    classDef orange fill:#FF9900,stroke:#333,stroke-width:2px;
+    classDef pink   fill:#FF4F8B,stroke:#333,stroke-width:2px;
+    classDef blue   fill:#4DA4DB,stroke:#333,stroke-width:2px;
+    classDef red    fill:#CC0000,stroke:#333,stroke-width:2px;
 
-  %% --- Styling ---
-  style Lambda fill:#FF9900,stroke:#333,stroke-width:2px
-  style S3     fill:#FF9900,stroke:#333,stroke-width:2px
-  style SQS    fill:#FF4F8B,stroke:#333,stroke-width:2px
-  style DynamoDB fill:#4DA4DB,stroke:#333,stroke-width:2px
-  style DLQ    fill:#CC0000,stroke:#333,stroke-width:2px
+    class Lambda,S3 orange;
+    class SQS pink;
+    class DynamoDB blue;
+    class DLQ red;
 ```
 
 -----

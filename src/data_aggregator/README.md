@@ -30,13 +30,13 @@ flowchart TD
   end
 
   ExternalParty -->|"1. Upload"| S3
-  S3 -->|"2. Event"| SQS
-  SQS -->|"3. Invoke"| Lambda
-  Lambda -->|"4. Idempotency"| Dynamo
-  Lambda -->|"5. Fetch"| S3
-  Lambda -->|"6. Metrics"| CW
-  Lambda -->|"7. Deliver"| MinIO
-  SQS -->|"Fail"| DLQ
+  S3            -->|"2. Event"| SQS
+  SQS           -->|"3. Invoke"| Lambda
+  Lambda        -->|"4. Idempotency"| Dynamo
+  Lambda        -->|"5. Fetch"| S3
+  Lambda        -->|"6. Metrics"| CW
+  Lambda        -->|"7. Deliver"| MinIO
+  SQS           -->|"Fail"| DLQ
 ```
 
 -----

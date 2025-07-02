@@ -1,7 +1,3 @@
-Of course. Here is a comprehensive version of the Code Design Document. It expands on the "what" and "why" by detailing the specific code patterns and implementation choices made in each module to meet the system's requirements.
-
------
-
 # Code Design & Implementation Guide: Data Aggregation Pipeline
 
 This document provides a detailed overview of the pipeline's code structure, design patterns, and the rationale behind key implementation decisions.

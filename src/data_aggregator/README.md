@@ -14,6 +14,7 @@ flowchart TD
   subgraph "On-Premise Data Center"
     MinIO["fa:fa-hdd<br/>MinIO Instance"]
   end
+
   subgraph "AWS Cloud (eu-west-2)"
     Lambda["fa:fa-microchip<br/>Aggregator Lambda"]
     S3["fa:fa-database<br/>S3 Landing Bucket"]
@@ -21,20 +22,27 @@ flowchart TD
     DLQ["fa:fa-exclamation-triangle<br/>Dead-Letter Queue"]
     DynamoDB["fa:fa-table<br/>Idempotency Table"]
     SecretsManager["fa:fa-key<br/>MinIO Credentials"]
-    CloudWatch["fa:fa-chart-bar<br/>Metrics & Alarms"]
+    CloudWatch["fa:fa-chart-bar<br/>CloudWatch Metrics & Alarms"]
   end
 
-  %% --- Edges ---
-  "External Party" -->|"1. Uploads files"| S3
-  S3 -->|"2. Event Notification"| SQS
-  SQS -- "Auto-scales based on queue depth" --> Lambda
-  Lambda -->|"3. Triggered with batch"| SQS
-  Lambda -->|"4. Checks & updates keys"| DynamoDB
-  Lambda -->|"5. Downloads files"| S3
-  SecretsManager -->|"6. Provides credentials"| Lambda
-  Lambda -.->|"7. Pushes metrics"| CloudWatch
-  Lambda -->|"8. Pushes archive"| MinIO
-  SQS -->|"Persistent Failure"| DLQ
+  %% --- Edges (Links) ---
+  "External Party" -->|"1. Uploads files (HTTPS)"| S3
+  S3            -->|"2. Event Notification"| SQS
+  SQS           -- "Auto-scales based on queue depth" --> Lambda
+  Lambda        -->|"3. Triggered with batch"| SQS
+  Lambda        -->|"4. Checks & updates keys"| DynamoDB
+  Lambda        -->|"5. Downloads files"| S3
+  SecretsManager-->|"6. Provides credentials"| Lambda
+  Lambda        -.->|"7. Pushes metrics"| CloudWatch
+  Lambda        -->|"8. Pushes archive (via private network)"| MinIO
+  SQS           -->|"Persistent Failure"| DLQ
+
+  %% --- Styling ---
+  style Lambda fill:#FF9900,stroke:#333,stroke-width:2px
+  style S3     fill:#FF9900,stroke:#333,stroke-width:2px
+  style SQS    fill:#FF4F8B,stroke:#333,stroke-width:2px
+  style DynamoDB fill:#4DA4DB,stroke:#333,stroke-width:2px
+  style DLQ    fill:#CC0000,stroke:#333,stroke-width:2px
 ```
 
 -----

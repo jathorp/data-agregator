@@ -1,0 +1,40 @@
+[project]
+name = "data-aggregator"
+version = "0.1.0"
+description = "Sync data between S3 and MinIO with aggregation and compresseion"
+readme = "README.md"
+authors = [
+    { name = "jt765487", email = "jt765487@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "aws-lambda-powertools>=3.15.1",
+    "boto3>=1.39.1",
+]
+
+[dependency-groups]
+dev = [
+  "boto3-stubs[dynamodb,s3,secretsmanager,sqs]>=1.39.1",
+  "pytest>=8.4.1",
+  "pytest-cov>=6.2.1",
+  "ruff>=0.12.1",
+]
+
+[project.scripts]
+data-aggregator = "data_aggregator:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+markers = [
+    "blackbox: marks tests as black-box end-to-end tests",
+    "integration: marks tests as integration tests"
+]
+
+[tool.mypy]
+plugins = ["mypy_boto3_plugin.main"]

@@ -18,7 +18,7 @@ flowchart TD
     subgraph "AWS Cloud (eu-west-2)"
         SecretsManager["Secrets Manager"]
         Lambda["Aggregator Lambda"]
-        ExternalParty[External Party]
+        ExternalParty["External Party"]
         S3["S3 Bucket"]
         SQS["SQS Queue"]
         DLQ["Dead-Letter Queue"]

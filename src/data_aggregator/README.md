@@ -14,6 +14,7 @@ flowchart TD
     subgraph "On-Premise Data Center"
         MinIO["MinIO Instance"]
     end
+    
     subgraph "AWS Cloud (eu-west-2)"
         SecretsManager["Secrets Manager"]
         Lambda["Aggregator Lambda"]

@@ -10,6 +10,8 @@ The system is a fully serverless, event-driven pipeline on AWS. It ingests a hig
 
 ```mermaid
 flowchart TD
+  %% External party
+  ExternalParty["External Party"]
 
   %% ───── On‑prem ─────
   subgraph OnPrem["On‑Premise Data Center"]
@@ -22,12 +24,12 @@ flowchart TD
     SQS["SQS Ingestion Queue"]
     DLQ["DLQ"]
     Lambda["Aggregator Lambda"]
-    Dynamo[DynamoDB Idempotency]
-    Secrets[Secrets Manager]
-    CW[CloudWatch]
+    Dynamo["DynamoDB Idempotency"]
+    Secrets["Secrets Manager"]
+    CW["CloudWatch"]
   end
 
-  "External Party" -->|"1. Upload"| S3
+  ExternalParty -->|"1. Upload"| S3
   S3 -->|"2. Event"| SQS
   SQS -->|"3. Invoke"| Lambda
   Lambda -->|"4. Idempotency"| Dynamo

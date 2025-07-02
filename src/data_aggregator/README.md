@@ -27,7 +27,7 @@ flowchart TD
     end
 
     %% ───────── Edges ─────────
-    ExternalParty -->| "1 - Uploads files (HTTPS)" | S3
+    ExternalParty -->|"1 - Uploads files (HTTPS)"| S3
     S3            -->| "2 - Event notification"  | SQS
     SQS           -->  "Auto-scales based on queue depth"  --> Lambda
     Lambda        -->| "3 - Triggered with batch" | SQS

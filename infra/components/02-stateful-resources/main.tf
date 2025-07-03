@@ -29,6 +29,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "landing" {
   rule {
     id     = "expire-after-7-days"
     status = "Enabled"
+
+    filter {} # <-- ADD THIS EMPTY BLOCK
+
     expiration {
       days = 7
     }
@@ -57,7 +60,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "archive" {
     status = "Enabled"
     transition {
       days          = 30
-      storage_class = "GLACIER_DEEP_ARCHIVE"
+      storage_class = "DEEP_ARCHIVE"
     }
   }
 }

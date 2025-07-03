@@ -134,7 +134,7 @@ flowchart TD
 
         %% Internal System Connections
         S3              -->|"2 - Event Notification"| SQS
-        SQS             -->|"3 - Triggers Lambda with batch<br/>Batch Size: 100, Window: 10s"| Lambda
+        SQS             -->|"3 - Triggers Lambda with batch"| Lambda
         Lambda -- "Reads State" --> DynamoCB
         Lambda -- "Checks & Updates Keys" --> DynamoDB
         SecretsManager -- "Provides Credentials" --> Lambda
@@ -145,8 +145,8 @@ flowchart TD
 
     %% ───────── Boundary Crossing Connections ─────────
     ExternalParty   -->|"1 - Uploads files (HTTPS)<br/>(Scoped IAM/IP Policy)"| S3
-    SecureTunnel -->|"7 - Delivers Archive<br/>(with X-Content-SHA256 Header)"| NiFi
-    NiFi -- "HTTP Response<br/>(Success/Failure)" --> Lambda
+    SecureTunnel -->|"7 - Delivers Archive"| NiFi
+    NiFi -- "HTTP Response" --> Lambda
 
     %% ───────── Styling ─────────
     linkStyle 18,19,20 stroke-width:2px,fill:none,stroke:black;

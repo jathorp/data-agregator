@@ -75,21 +75,6 @@ flowchart TD
         DynamoDB["fa:fa-table<br/>Idempotency Table<br/>(7-Day TTL)"]
         SecretsManager["fa:fa-key<br/>Secrets Manager"]
         CloudWatch["fa:fa-chart-bar<br/>CloudWatch Metrics & Alarms"]
-        
-        %% Lambda Processing Logic Sub-graph
-        subgraph "Lambda Processing Logic"
-            direction LR
-            L_Start("Start")
-            L_CheckCircuit["4 - Check Circuit State"]
-            L_ProcessBatch["5 - Process Batch<br/>(Check Idempotency, Download)"]
-            L_GetCreds["6 - Get Credentials"]
-            L_Post["7 - POST Gzip Archive"]
-            L_UpdateCircuit["8 - Update Circuit State"]
-            L_Metrics["9 - Push Metrics"]
-            L_End("End")
-    
-            L_Start --> L_CheckCircuit --> L_ProcessBatch --> L_GetCreds --> L_Post --> L_UpdateCircuit --> L_Metrics --> L_End
-        end
 
         %% Internal System Connections
         S3              -->|"2 - Event Notification"| SQS
@@ -120,6 +105,23 @@ flowchart TD
     class SecureTunnel,NiFi conn
     class DLQ danger
     class ExternalParty key
+```
+```mermaid
+flowchart TD
+    %% Lambda Processing Logic Sub-graph
+    subgraph "Lambda Processing Logic"
+        direction LR
+        L_Start("Start")
+        L_CheckCircuit["4 - Check Circuit State"]
+        L_ProcessBatch["5 - Process Batch<br/>(Check Idempotency, Download)"]
+        L_GetCreds["6 - Get Credentials"]
+        L_Post["7 - POST Gzip Archive"]
+        L_UpdateCircuit["8 - Update Circuit State"]
+        L_Metrics["9 - Push Metrics"]
+        L_End("End")
+
+        L_Start --> L_CheckCircuit --> L_ProcessBatch --> L_GetCreds --> L_Post --> L_UpdateCircuit --> L_Metrics --> L_End
+    end
 ```
 
 ##### **4.3. Design Considerations & Risk Mitigation**

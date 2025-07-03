@@ -122,7 +122,7 @@ flowchart TD
             direction LR
             L_Start("Start")
             L_CheckCircuit["4 - Check Circuit State"]
-            L_ProcessBatch["5 - Process Batch<br/>(Check Idempotency, Download)"]
+            L_ProcessBatch["5 - Process Batch<br/>Check Idempotency, Download"]
             L_GetCreds["6 - Get Credentials"]
             L_Post["7 - POST Gzip Archive"]
             L_UpdateCircuit["8 - Update Circuit State"]
@@ -134,13 +134,13 @@ flowchart TD
 
         %% Internal System Connections
         S3              -->|"2 - Event Notification"| SQS
-        SQS             -->|"3 - Triggers Lambda with batch<br/>(Batch Size: 100, Window: 10s)"| Lambda
+        SQS             -->|"3 - Triggers Lambda with batch<br/>Batch Size: 100, Window: 10s"| Lambda
         Lambda -- "Reads State" --> DynamoCB
         Lambda -- "Checks & Updates Keys" --> DynamoDB
         SecretsManager -- "Provides Credentials" --> Lambda
         Lambda -- "Pushes Logs & Metrics" --> CloudWatch
         Lambda --> SecureTunnel
-        SQS -->|"10 - Persistent Failure<br/>(Partial Batch Aware)"| DLQ
+        SQS -->|"10 - Persistent Failure<br/>Partial Batch Aware"| DLQ
     end
 
     %% ───────── Boundary Crossing Connections ─────────

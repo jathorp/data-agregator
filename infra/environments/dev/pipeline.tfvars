@@ -9,3 +9,9 @@ main_queue_name             = "data-agregator-main-queue-dev"
 dlq_name                    = "data-agregator-dlq-dev"
 idempotency_table_name      = "data-agregator-idempotency-dev"
 circuit_breaker_table_name  = "data-agregator-circuit-breaker-dev"
+
+lambda_function_name = "data-agregator-processor-dev"
+lambda_handler       = "main.handler" # Assumes python file is main.py and function is handler
+lambda_runtime       = "python3.11"
+lambda_timeout       = 30 # seconds
+lambda_memory_size   = 512 # MB

@@ -104,11 +104,10 @@ flowchart TD
 
     %% ───────── Boundary Crossing Connections ─────────
     ExternalParty   -->|"1 - Uploads files (HTTPS)<br/>(Scoped IAM/IP Policy)"| S3
-    SecureTunnel -->|"7 - Delivers Archive<br/>(with X-Content-SHA256 Header)"| NiFi
+    SecureTunnel -->|"Delivers Archive<br/>(with X-Content-SHA256 Header)"| NiFi
     NiFi -- "HTTP Response<br/>(Success/Failure)" --> Lambda
 
     %% ───────── Styling ─────────
-    linkStyle 18,19,20 stroke-width:2px,fill:none,stroke:black;
     classDef main fill:#FF9900,stroke:#333,stroke-width:2px;
     classDef supp fill:#4DA4DB,stroke:#333,stroke-width:2px;
     classDef conn fill:#0073BB,stroke:#333,stroke-width:2px;

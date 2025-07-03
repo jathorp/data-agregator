@@ -82,14 +82,14 @@ flowchart TD
   Lambda        -->|"6 - Downloads files"| S3
   SecretsManager-->|"7 - Provides credentials"| Lambda
   Lambda        -->|"8 - Pushes metrics"| CloudWatch
-  Lambda        -->|9a - POSTs batch<br/>(X-Content-SHA256 Header)| SecureTunnel
+  Lambda        -->|"9a - POSTs batch<br/>(X-Content-SHA256 Header)""| SecureTunnel
   SecureTunnel  --> NiFi
 
   NiFi -- "Success" --> Lambda
   NiFi -- "Failure" --> Lambda
   Lambda        -->|"9b - Resets Circuit"| DynamoCB
   Lambda        -->|"9c - Trips Circuit"| DynamoCB
-  SQS           -->|"Persistent Failure<br/>(Partial Batch Aware)"| DLQ
+  SQS           -->|"Persistent Failure(Partial Batch Aware)"| DLQ
 
   %% ───────── Styling ─────────
   style Lambda fill:#FF9900,stroke:#333,stroke-width:2px

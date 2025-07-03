@@ -92,85 +92,19 @@ flowchart TD
         end
 
         %% Internal System Connections
-        S3              -->|2 - Event Notification| SQS
-        SQS             -->|3 - Triggers Lambda with batch<br/>(Batch Size: 100, Window: 10s)| Lambda
-        Lambda -- "Reads State" --> DynamoCB
-        Lambda -- "Checks & Updates Keys" --> DynamoDBflowchart TD
-    %% ───────── External Entities ─────────
-    ExternalParty["External Party"]
-    subgraph "On-Premise Data Center"
-        NiFi["fa:fa-network-wired<br/>NiFi HTTP Endpoint"]
-    end
-
-    %% ───────── AWS Cloud (eu-west-2) System Boundary ─────────
-    subgraph "AWS Cloud (eu-west-2)"
-        %% Main Data Flow Nodes
-        S3["fa:fa-database<br/>S3 Bucket"]
-        SQS["fa:fa-list-alt<br/>SQS Queue"]
-        Lambda["fa:fa-microchip<br/>Aggregator Lambda"]
-        SecureTunnel["fa:fa-shield-alt<br/>VPN / Direct Connect"]
-        DLQ["fa:fa-exclamation-triangle<br/>Dead-Letter Queue"]
-        
-        %% Supporting Service Nodes
-        DynamoCB["fa:fa-bolt<br/>Circuit Breaker Table"]
-        DynamoDB["fa:fa-table<br/>Idempotency Table<br/>(7-Day TTL)"]
-        SecretsManager["fa:fa-key<br/>Secrets Manager"]
-        CloudWatch["fa:fa-chart-bar<br/>CloudWatch Metrics & Alarms"]
-        
-        %% Lambda Processing Logic Sub-graph
-        subgraph "Lambda Processing Logic"
-            direction LR
-            L_Start("Start")
-            L_CheckCircuit["4 - Check Circuit State"]
-            L_ProcessBatch["5 - Process Batch<br/>Check Idempotency, Download"]
-            L_GetCreds["6 - Get Credentials"]
-            L_Post["7 - POST Gzip Archive"]
-            L_UpdateCircuit["8 - Update Circuit State"]
-            L_Metrics["9 - Push Metrics"]
-            L_End("End")
-    
-            L_Start --> L_CheckCircuit --> L_ProcessBatch --> L_GetCreds --> L_Post --> L_UpdateCircuit --> L_Metrics --> L_End
-        end
-
-        %% Internal System Connections
         S3              -->|"2 - Event Notification"| SQS
-        SQS             -->|"3 - Triggers Lambda with batch"| Lambda
+        SQS             -->|"3 - Triggers Lambda with batch<br/>(Batch Size: 100, Window: 10s)"| Lambda
         Lambda -- "Reads State" --> DynamoCB
         Lambda -- "Checks & Updates Keys" --> DynamoDB
         SecretsManager -- "Provides Credentials" --> Lambda
         Lambda -- "Pushes Logs & Metrics" --> CloudWatch
         Lambda --> SecureTunnel
-        SQS -->|"10 - Persistent Failure<br/>Partial Batch Aware"| DLQ
+        SQS -->|"10 - Persistent Failure<br/>(Partial Batch Aware)"| DLQ
     end
 
     %% ───────── Boundary Crossing Connections ─────────
     ExternalParty   -->|"1 - Uploads files (HTTPS)<br/>(Scoped IAM/IP Policy)"| S3
-    SecureTunnel -->|"7 - Delivers Archive"| NiFi
-    NiFi -- "HTTP Response" --> Lambda
-
-    %% ───────── Styling ─────────
-    linkStyle 18,19,20 stroke-width:2px,fill:none,stroke:black;
-    classDef main fill:#FF9900,stroke:#333,stroke-width:2px;
-    classDef supp fill:#4DA4DB,stroke:#333,stroke-width:2px;
-    classDef conn fill:#0073BB,stroke:#333,stroke-width:2px;
-    classDef danger fill:#CC0000,stroke:#333,stroke-width:2px;
-    classDef key fill:#D6EAF8,stroke:#333,stroke-width:2px;
-
-    class Lambda,S3 main
-    class SQS main,fill:#FF4F8B
-    class DynamoDB,DynamoCB,SecretsManager,CloudWatch supp
-    class SecureTunnel,NiFi conn
-    class DLQ danger
-    class ExternalParty key
-        SecretsManager -- "Provides Credentials" --> Lambda
-        Lambda -- "Pushes Logs & Metrics" --> CloudWatch
-        Lambda --> SecureTunnel
-        SQS -->|10 - Persistent Failure<br/>(Partial Batch Aware)| DLQ
-    end
-
-    %% ───────── Boundary Crossing Connections ─────────
-    ExternalParty   -->|1 - Uploads files (HTTPS)<br/>(Scoped IAM/IP Policy)| S3
-    SecureTunnel -->|"(X-Content-SHA256 Header)"| NiFi
+    SecureTunnel -->|"7 - Delivers Archive<br/>(with X-Content-SHA256 Header)"| NiFi
     NiFi -- "HTTP Response<br/>(Success/Failure)" --> Lambda
 
     %% ───────── Styling ─────────

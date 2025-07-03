@@ -82,7 +82,7 @@ flowchart TD
   Lambda        -->|"6 - Downloads files"| S3
   SecretsManager-->|"7 - Provides credentials"| Lambda
   Lambda        -->|"8 - Pushes metrics"| CloudWatch
-  Lambda        -->|"9a - POSTs batch<br/>(X-Content-SHA256 Header)""| SecureTunnel
+  Lambda        -->|"9a - POSTs batch<br/>(X-Content SHA256 Header)""| SecureTunnel
   SecureTunnel  --> NiFi
 
   NiFi -- "Success" --> Lambda

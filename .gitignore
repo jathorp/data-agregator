@@ -13,7 +13,6 @@ wheels/
 .terraform/
 *.tfstate
 *.tfstate.*
-*.tfvars
 *.tfvars.json
 
 # Build artifacts

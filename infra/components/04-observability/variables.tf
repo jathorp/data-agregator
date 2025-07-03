@@ -1,13 +1,21 @@
-# File: infra/modules/data_pipeline/variables.tf
+# File: variables.tf
 
 variable "project_name" {
-  description = "The short, unique name for the project."
+  description = "A short, unique name for the project (e.g., 'data-pipeline')."
   type        = string
+  default     = "data-pipeline"
 }
 
 variable "environment" {
   description = "The deployment environment (e.g., 'dev', 'stg', 'prod')."
   type        = string
+  default     = "dev"
+}
+
+variable "aws_region" {
+  description = "The AWS region where resources will be deployed (e.g., 'eu-west-2')."
+  type        = string
+  default     = "eu-west-2"
 }
 
 variable "minio_secret_arn" {

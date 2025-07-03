@@ -58,6 +58,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "archive" {
   rule {
     id     = "archive-to-deep-archive"
     status = "Enabled"
+
+    filter {}
+
     transition {
       days          = 30
       storage_class = "DEEP_ARCHIVE"

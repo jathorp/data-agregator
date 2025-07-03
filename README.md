@@ -68,7 +68,7 @@ flowchart TD
     DynamoCB["fa:fa-bolt<br/>Circuit Breaker Table"]
     SecretsManager["fa:fa-key<br/>Secrets Manager"]
     CloudWatch["fa:fa-chart-bar<br/>CloudWatch Metrics & Alarms"]
-    SecureTunnel["fa:fa-shield-alt<br/>VPN / Direct Connect"]
+    SecureTunnel["fa:fa-shield-alt<br/>TBD"]
   end
 
   %% ───────── Edges ─────────

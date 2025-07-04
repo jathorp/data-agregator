@@ -16,20 +16,17 @@ resource "aws_security_group" "alb_sg" {
   description = "Allow inbound HTTPS for the mock NiFi ALB"
   vpc_id      = var.vpc_id
   tags        = local.common_tags
-
-  # We will define the ingress rule in the main application component,
-  # referencing the Lambda's security group ID for tight coupling.
 }
 
 # 2. The Application Load Balancer itself
+# This is the single, correct definition for the ALB.
 resource "aws_lb" "mock_nifi" {
   name               = local.name_prefix
-  internal           = true # IMPORTANT: This keeps the ALB private to the VPC
+  internal           = true
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
-  subnets            = var.public_subnet_ids # Place ALB nodes in public subnets for resilience
+  subnets            = var.private_subnet_ids # Correctly uses private subnets
 
-  # Enable access logging to verify requests from the Lambda
   access_logs {
     bucket  = aws_s3_bucket.access_logs.id
     prefix  = "alb-logs"
@@ -55,49 +52,41 @@ resource "aws_s3_bucket_policy" "access_logs_policy" {
   policy = data.aws_iam_policy_document.s3_policy.json
 }
 
+# CORRECTED: This data source looks up the correct service account for the ELB service.
 data "aws_elb_service_account" "current" {}
 
+# CORRECTED: The IAM policy document now uses the secure principal.
 data "aws_iam_policy_document" "s3_policy" {
   statement {
+    effect = "Allow"
     principals {
       type        = "AWS"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+      # This identifier correctly grants permission ONLY to the ELB service.
+      identifiers = [data.aws_elb_service_account.current.arn]
     }
     actions   = ["s3:PutObject"]
     resources = ["${aws_s3_bucket.access_logs.arn}/*"]
   }
 }
 
-data "aws_caller_identity" "current" {}
-
-
 # 4. A "Fixed Response" Target Group
-# This is the magic part. It tells the ALB to simply return a 200 OK
-# without forwarding the request to any real backend server.
-resource "aws_lb" "mock_nifi" {
-  name               = local.name_prefix
-  internal           = true
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb_sg.id]
-  # Placing the internal ALB in private subnets.
-  subnets            = var.private_subnet_ids
-
-  access_logs {
-    bucket  = aws_s3_bucket.access_logs.id
-    prefix  = "alb-logs"
-    enabled = true
-  }
-  tags = local.common_tags
+resource "aws_lb_target_group" "fixed_response" {
+  name        = "${local.name_prefix}-tg"
+  port        = 443
+  protocol    = "HTTPS"
+  vpc_id      = var.vpc_id
+  target_type = "lambda" # Must be 'lambda' for fixed-response, even though we don't register one.
+  tags        = local.common_tags
 }
+
 # 5. The HTTPS Listener
 resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.mock_nifi.arn
   port              = "443"
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-2016-08"
-  certificate_arn   = aws_acm_certificate.self_signed.arn # Use a self-signed cert for dev
+  certificate_arn   = aws_acm_certificate.self_signed.arn
 
-  # The default action is to use our fixed-response target group
   default_action {
     type = "fixed-response"
     fixed_response {

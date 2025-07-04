@@ -1,19 +1,19 @@
 #!/bin/bash
 
+# This script destroys all infrastructure for a given environment in the correct reverse order.
 # Exit immediately if a command exits with a non-zero status.
-# This ensures that if '01-network' fails, we don't try to deploy '02-stateful-resources'.
 set -e
 
 # --- Configuration ---
-# The environment to deploy (e.g., "dev", "prod"). Passed as the first argument to the script.
+# The environment to destroy (e.g., "dev"). Passed as the first argument to the script.
 ENVIRONMENT=$1
 
-# An array defining the components in the correct deployment order.
+# An array defining the components in the REVERSE order of creation for safe destruction.
 COMPONENTS=(
-  "01-network"
-  "02-stateful-resources"
-  "03-application"
   "04-observability"
+  "03-application"
+  "02-stateful-resources"
+  "01-network"
 )
 # --- End Configuration ---
 
@@ -22,39 +22,41 @@ COMPONENTS=(
 # Check if an environment was provided.
 if [ -z "$ENVIRONMENT" ]; then
   echo "❌ Error: No environment specified."
-  echo "Usage: ./setup.sh <environment_name> (e.g., dev)"
+  echo "Usage: ./destroy.sh <environment_name> (e.g., dev)"
   exit 1
 fi
 
-echo "🚀 Starting deployment for environment: $ENVIRONMENT"
+echo "🔥 Starting destruction for environment: $ENVIRONMENT"
+echo "   You have 5 seconds to cancel (Ctrl+C)..."
+sleep 5
 
 # Get the absolute path of the directory where the script is located.
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 ENV_DIR="$SCRIPT_DIR/environments/$ENVIRONMENT"
 
-# Loop through each component in the defined order.
+# Loop through each component in the defined REVERSE order.
 for component in "${COMPONENTS[@]}"; do
   echo "-----------------------------------------------------"
-  echo "🔹 Deploying component: $component"
+  echo "🔹 Destroying component: $component"
   echo "-----------------------------------------------------"
 
   COMPONENT_DIR="$SCRIPT_DIR/components/$component"
 
   # Define paths for the backend and variable files.
-  # Note: The variable file name matches the component directory name.
   BACKEND_CONFIG="$ENV_DIR/$component.backend.tfvars"
   COMMON_VARS="$ENV_DIR/common.tfvars"
-  COMPONENT_VARS="$ENV_DIR/${component#*-}.tfvars" # Removes the "01-", "02-" prefix
+  COMPONENT_VARS="$ENV_DIR/${component#*-}.tfvars"
 
   # Change into the component's directory.
   cd "$COMPONENT_DIR"
 
-  # Run Terraform commands.
+  # Initialize Terraform to read the state.
   echo "   Running terraform init..."
   terraform init -input=false -backend-config="$BACKEND_CONFIG"
 
-  echo "   Running terraform apply..."
-  terraform apply -input=false -auto-approve \
+  # Run terraform destroy.
+  echo "   Running terraform destroy..."
+  terraform destroy -input=false -auto-approve \
     -var-file="$COMMON_VARS" \
     -var-file="$COMPONENT_VARS"
 
@@ -62,4 +64,4 @@ for component in "${COMPONENTS[@]}"; do
   cd "$SCRIPT_DIR"
 done
 
-echo "✅ Deployment for environment '$ENVIRONMENT' completed successfully!"
+echo "✅ Destruction for environment '$ENVIRONMENT' completed successfully!"

@@ -39,6 +39,18 @@ variable "lambda_memory_size" {
   default     = 512
 }
 
+variable "lambda_ephemeral_storage_size" {
+  description = "The size of the Lambda function's /tmp directory in MB. Min 512, Max 10240."
+  type        = number
+  default     = 2048 # A sensible default for the streaming architecture.
+}
+
+variable "idempotency_ttl_days" {
+  description = "The number of days to retain the idempotency key in DynamoDB."
+  type        = number
+  default     = 7
+}
+
 variable "nifi_endpoint_url" {
   description = "The full HTTPS URL for the on-premise NiFi ingest endpoint."
   type        = string

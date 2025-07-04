@@ -40,15 +40,17 @@ The codebase is organized into logical directories with clear responsibilities:
 
 Terraform requires an S3 bucket to store its state. This script uses the AWS CLI to create and secure this bucket before Terraform runs for the first time.
 
-1.  Make the script executable: `chmod +x create_backend.sh`
-2.  Run the bootstrap script: `./create_backend.sh`
+1.  Navigate to the infrastructure directory: `cd infra`
+2.  Make the script executable: `chmod +x create_backend.sh`
+3.  Run the bootstrap script: `./create_backend.sh`
 
 ### Stage 2: Deploying the Application Infrastructure
 
 Use the `setup.sh` script to deploy or update the application components. This is the command you will use for all subsequent deployments.
 
-1.  Make the script executable: `chmod +x setup.sh`
-2.  Run the full deployment for the `dev` environment: `./setup.sh dev`
+1.  Navigate to the infrastructure directory: `cd infra`
+2.  Make the script executable: `chmod +x setup.sh`
+3.  Run the full deployment: `./setup.sh dev`
 
 ### Stage 3: Critical Post-Deployment Step (After First Deploy)
 

@@ -1,8 +1,6 @@
-# We will create a very simple VPC and one private subnet for now.
-# Note: We aren't creating modules yet, just defining resources directly.
+# components/01-network/main.tf
 
 locals {
-  # Central place for tags to ensure consistency.
   common_tags = {
     Project     = var.project_name
     Environment = var.environment_name
@@ -10,54 +8,94 @@ locals {
   }
 }
 
+# --- Core VPC ---
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr_block
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags                 = merge(local.common_tags, {
-    Name = "${var.project_name}-vpc"
-  })
+  tags                 = merge(local.common_tags, { Name = "${var.project_name}-vpc" })
+}
+
+# --- Subnets (Now Multi-AZ) ---
+# Use for_each to create one of each subnet type in each specified Availability Zone.
+resource "aws_subnet" "public" {
+  for_each = toset(var.availability_zones)
+
+  vpc_id                  = aws_vpc.main.id
+  availability_zone       = each.key
+  cidr_block              = var.public_subnet_cidrs[index(var.availability_zones, each.key)]
+  map_public_ip_on_launch = true # Instances in public subnets get public IPs
+
+  tags = merge(local.common_tags, { Name = "${var.project_name}-public-subnet-${each.key}" })
 }
 
 resource "aws_subnet" "private" {
-  vpc_id     = aws_vpc.main.id
-  cidr_block = var.subnet_cidr_block
-  tags       = merge(local.common_tags, { Name = "${var.project_name}-private-subnet" })
+  for_each = toset(var.availability_zones)
+
+  vpc_id            = aws_vpc.main.id
+  availability_zone = each.key
+  cidr_block        = var.private_subnet_cidrs[index(var.availability_zones, each.key)]
+
+  tags = merge(local.common_tags, { Name = "${var.project_name}-private-subnet-${each.key}" })
 }
 
-resource "aws_network_acl" "private" {
+# --- Internet Connectivity for Public Subnets ---
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+  tags   = merge(local.common_tags, { Name = "${var.project_name}-igw" })
+}
+
+resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
-  # OUTBOUND RULES: What can leave our subnet?
-  # By default, we will allow our Lambda to initiate traffic to the on-premise network.
-  # This allows outbound traffic on any port to any destination within the private network.
-  # This will be further restricted by the Lambda's Security Group later.
-  egress {
-    protocol   = "-1" # -1 means all protocols
-    rule_no    = 100
-    action     = "allow"
+  route {
     cidr_block = "0.0.0.0/0"
-    from_port  = 0
-    to_port    = 0
+    gateway_id = aws_internet_gateway.main.id
   }
 
-  # INBOUND RULES: What can enter our subnet?
-  # We only allow "return" traffic from the connections our Lambda made.
-  # This uses ephemeral ports, which is standard for stateful connections.
-  ingress {
-    protocol   = "tcp"
-    rule_no    = 100
-    action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 1024
-    to_port    = 65535
-  }
-
-  tags = merge(local.common_tags, { Name = "${var.project_name}-private-nacl" })
+  tags = merge(local.common_tags, { Name = "${var.project_name}-public-rt" })
 }
 
-# Associate our new, secure NACL with our private subnet.
-resource "aws_network_acl_association" "private" {
-  network_acl_id = aws_network_acl.private.id
-  subnet_id      = aws_subnet.private.id
+resource "aws_route_table_association" "public" {
+  for_each = aws_subnet.public
+
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.public.id
+}
+
+# --- Egress Connectivity for Private Subnets (via NAT Gateway) ---
+# The NAT Gateway needs an Elastic IP and lives in a public subnet.
+resource "aws_eip" "nat" {
+  domain = "vpc"
+  tags   = merge(local.common_tags, { Name = "${var.project_name}-nat-eip" })
+}
+
+resource "aws_nat_gateway" "main" {
+  # For high availability, you could create a NAT Gateway in each AZ.
+  # For simplicity and cost, we will start with one.
+  allocation_id = aws_eip.nat.id
+  subnet_id     = values(aws_subnet.public)[0].id # Place NAT in the first public subnet
+
+  tags = merge(local.common_tags, { Name = "${var.project_name}-nat-gw" })
+
+  # Explicitly depend on the IGW being created first.
+  depends_on = [aws_internet_gateway.main]
+}
+
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.main.id
+  }
+
+  tags = merge(local.common_tags, { Name = "${var.project_name}-private-rt" })
+}
+
+resource "aws_route_table_association" "private" {
+  for_each = aws_subnet.private
+
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.private.id
 }

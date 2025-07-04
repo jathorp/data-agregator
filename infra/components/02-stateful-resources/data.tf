@@ -1,4 +1,4 @@
-# This is where we read the outputs from the network component's state file.
+# components/02-stateful-resources/data.tf
 
 data "terraform_remote_state" "network" {
   backend = "s3"

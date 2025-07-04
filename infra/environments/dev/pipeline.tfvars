@@ -15,3 +15,5 @@ lambda_handler       = "main.handler" # Assumes python file is main.py and funct
 lambda_runtime       = "python3.11"
 lambda_timeout       = 30 # seconds
 lambda_memory_size   = 512 # MB
+
+alerting_sns_topic_name = "data-agregator-alerts-dev"

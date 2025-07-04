@@ -15,7 +15,8 @@ variable "vpc_id" {
   type        = string
 }
 
-variable "public_subnet_ids" {
-  description = "List of public subnet IDs for the ALB."
+# UPDATED: Action 2 - The ALB is now placed in private subnets for better security.
+variable "private_subnet_ids" {
+  description = "List of private subnet IDs for the internal ALB."
   type        = list(string)
 }

@@ -10,16 +10,18 @@ variable "environment_name" {
   type        = string
 }
 
+# --- S3 Variables ---
 variable "landing_bucket_name" {
-  description = "The name of the S3 landing bucket."
+  description = "The base name for the S3 landing bucket. A random suffix will be added."
   type        = string
 }
 
 variable "archive_bucket_name" {
-  description = "The name of the S3 archive bucket."
+  description = "The base name for the S3 archive bucket. A random suffix will be added."
   type        = string
 }
 
+# --- SQS Variables ---
 variable "main_queue_name" {
   description = "The name of the main SQS processing queue."
   type        = string
@@ -30,6 +32,7 @@ variable "dlq_name" {
   type        = string
 }
 
+# --- DynamoDB Variables ---
 variable "idempotency_table_name" {
   description = "The name of the DynamoDB table for idempotency."
   type        = string
@@ -37,5 +40,23 @@ variable "idempotency_table_name" {
 
 variable "circuit_breaker_table_name" {
   description = "The name of the DynamoDB table for the circuit breaker."
+  type        = string
+}
+
+# Variable for the secret that will hold NiFi credentials.
+variable "nifi_secret_name" {
+  description = "The name of the secret in Secrets Manager to store NiFi credentials."
+  type        = string
+}
+
+# The ARN of the IAM role responsible for administering the KMS key.
+variable "kms_admin_role_arn" {
+  description = "ARN of the IAM role that will have administrative permissions on the KMS key."
+  type        = string
+}
+
+# The name for the Lambda's IAM role, which will be created here.
+variable "lambda_role_name" {
+  description = "The name for the Lambda function's IAM role."
   type        = string
 }

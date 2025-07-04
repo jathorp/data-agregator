@@ -1,9 +1,12 @@
 # environments/dev/application.tfvars
 
-# Values for the '03-application' component
+# Variables specific to the '03-application' component.
 
-lambda_function_name = "data-aggregator-dev"
+lambda_function_name = "data-aggregator-processor-dev"
+lambda_handler       = "handler.lambda_handler"
+lambda_runtime       = "python3.13"
 
-# Configuration for the NiFi endpoint this 'dev' environment should talk to.
-nifi_endpoint_url  = "https://nifi-dev.onprem.example.com/contentListener"
-nifi_endpoint_cidr = "10.100.10.5/32"
+# These are not used for the 'dev' environment because it uses the mock endpoint,
+# but they are required variables for the component. We can provide dummy values.
+nifi_endpoint_url  = "https://placeholder.example.com"
+nifi_endpoint_cidr = "0.0.0.0/32"

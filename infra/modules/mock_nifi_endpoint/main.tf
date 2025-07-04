@@ -55,6 +55,8 @@ resource "aws_s3_bucket_policy" "access_logs_policy" {
   policy = data.aws_iam_policy_document.s3_policy.json
 }
 
+data "aws_elb_service_account" "current" {}
+
 data "aws_iam_policy_document" "s3_policy" {
   statement {
     principals {
@@ -72,15 +74,21 @@ data "aws_caller_identity" "current" {}
 # 4. A "Fixed Response" Target Group
 # This is the magic part. It tells the ALB to simply return a 200 OK
 # without forwarding the request to any real backend server.
-resource "aws_lb_target_group" "fixed_response" {
-  name        = "${local.name_prefix}-tg"
-  port        = 443
-  protocol    = "HTTPS"
-  vpc_id      = var.vpc_id
-  target_type = "lambda" # Must be 'lambda' for fixed-response, even though we don't register one.
-  tags        = local.common_tags
-}
+resource "aws_lb" "mock_nifi" {
+  name               = local.name_prefix
+  internal           = true
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  # Placing the internal ALB in private subnets.
+  subnets            = var.private_subnet_ids
 
+  access_logs {
+    bucket  = aws_s3_bucket.access_logs.id
+    prefix  = "alb-logs"
+    enabled = true
+  }
+  tags = local.common_tags
+}
 # 5. The HTTPS Listener
 resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.mock_nifi.arn

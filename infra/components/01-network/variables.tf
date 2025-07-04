@@ -15,26 +15,14 @@ variable "vpc_cidr_block" {
   type        = string
 }
 
+# REFINED: Changed from list(string) to map(string) for explicit AZ-to-CIDR mapping.
 variable "private_subnet_cidrs" {
-  description = "A list of CIDR blocks for the private subnets."
-  type        = list(string)
-  validation {
-    condition     = length(var.private_subnet_cidrs) == length(var.availability_zones)
-    error_message = "The number of private subnet CIDRs must match the number of availability zones."
-  }
+  description = "A map of CIDR blocks for the private subnets, keyed by Availability Zone name."
+  type        = map(string)
 }
 
+# REFINED: Changed from list(string) to map(string).
 variable "public_subnet_cidrs" {
-  description = "A list of CIDR blocks for the public subnets."
-  type        = list(string)
-  validation {
-    condition     = length(var.public_subnet_cidrs) == length(var.availability_zones)
-    error_message = "The number of public subnet CIDRs must match the number of availability zones."
-  }
-}
-
-# NEW: We explicitly define the AZs to use.
-variable "availability_zones" {
-  description = "A list of Availability Zones to deploy resources into."
-  type        = list(string)
+  description = "A map of CIDR blocks for the public subnets, keyed by Availability Zone name."
+  type        = map(string)
 }

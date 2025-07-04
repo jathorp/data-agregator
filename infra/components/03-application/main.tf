@@ -5,11 +5,7 @@
 # These retrieve information from AWS or from other Terraform state files.
 # -----------------------------------------------------------------------------
 
-# Automatically get the current AWS account ID and region for building ARNs.
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
-
-# Read outputs from the 01-network component (VPC, Subnets).
+# Read outputs from the 01-network component.
 data "terraform_remote_state" "network" {
   backend = "s3"
   config = {
@@ -19,15 +15,21 @@ data "terraform_remote_state" "network" {
   }
 }
 
-# Read outputs from the 02-stateful-resources component (S3, SQS, DynamoDB, Secret).
+# Read outputs from the 02-stateful-resources component.
 data "terraform_remote_state" "stateful" {
   backend = "s3"
   config = {
     bucket = "data-agregator-tfstate-2-dev"
-    key    = "dev/components/02-data-pipeline.tfstate"
+    # This key now correctly points to the stateful resources component.
+    key    = "dev/components/02-stateful-resources.tfstate"
     region = "eu-west-2"
   }
 }
+
+# Automatically get the current AWS account ID and region for building ARNs.
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
 
 locals {
   common_tags = {
@@ -39,7 +41,6 @@ locals {
 
 # -----------------------------------------------------------------------------
 # DEV-ONLY: Conditionally create the Mock NiFi Endpoint.
-# This entire module is only instantiated if var.environment_name is "dev".
 # -----------------------------------------------------------------------------
 module "mock_nifi_endpoint" {
   source = "../../modules/mock_nifi_endpoint"
@@ -49,28 +50,13 @@ module "mock_nifi_endpoint" {
   project_name      = var.project_name
   environment_name  = var.environment_name
   vpc_id            = data.terraform_remote_state.network.outputs.vpc_id
-  public_subnet_ids = data.terraform_remote_state.network.outputs.public_subnet_ids
+  public_subnet_ids = values(data.terraform_remote_state.network.outputs.public_subnet_ids)
 }
 
 # -----------------------------------------------------------------------------
-# Section 1: IAM Role & Permissions for the Lambda Function
-# Defines what the Lambda is ALLOWED to do (Principle of Least Privilege).
+# Section 1: IAM Policy & Attachment for the Lambda Function
+# Defines the specific permissions for this application component.
 # -----------------------------------------------------------------------------
-
-resource "aws_iam_role" "aggregator_lambda_role" {
-  name = "${var.lambda_function_name}-role"
-  tags = local.common_tags
-
-  assume_role_policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = [{
-      Action    = "sts:AssumeRole"
-      Effect    = "Allow"
-      Principal = { Service = "lambda.amazonaws.com" }
-    }]
-  })
-}
-
 resource "aws_iam_policy" "aggregator_lambda_policy" {
   name        = "${var.lambda_function_name}-permissions"
   description = "Permissions for the data aggregator Lambda function"
@@ -121,16 +107,14 @@ resource "aws_iam_policy" "aggregator_lambda_policy" {
 }
 
 resource "aws_iam_role_policy_attachment" "aggregator_lambda_attach" {
-  role       = aws_iam_role.aggregator_lambda_role.name
+  role       = data.terraform_remote_state.stateful.outputs.lambda_iam_role_name
   policy_arn = aws_iam_policy.aggregator_lambda_policy.arn
 }
-
 
 # -----------------------------------------------------------------------------
 # Section 2: Lambda Security Group & Rules
 # The stateful firewall for our function, with environment-specific rules.
 # -----------------------------------------------------------------------------
-
 resource "aws_security_group" "aggregator_lambda_sg" {
   name        = "${var.lambda_function_name}-sg"
   description = "Controls network access for the aggregator Lambda"
@@ -167,15 +151,14 @@ resource "aws_security_group_rule" "lambda_to_mock_nifi" {
 # Section 3: The Lambda Function Resource
 # The core application compute, with environment-specific configuration.
 # -----------------------------------------------------------------------------
-
 resource "aws_lambda_function" "aggregator" {
-  function_name    = var.lambda_function_name
-  role             = aws_iam_role.aggregator_lambda_role.arn
-  handler          = var.lambda_handler
-  runtime          = var.lambda_runtime
-  architectures    = ["arm64"]
-  timeout          = var.lambda_timeout
-  memory_size      = var.lambda_memory_size
+  function_name = var.lambda_function_name
+  role          = data.terraform_remote_state.stateful.outputs.lambda_iam_role_arn
+  handler       = var.lambda_handler
+  runtime       = var.lambda_runtime
+  architectures = ["arm64"]
+  timeout       = var.lambda_timeout
+  memory_size   = var.lambda_memory_size
 
   # Placeholder for the CI/CD pipeline to update with the real application code.
   filename         = "dummy.zip"
@@ -183,7 +166,8 @@ resource "aws_lambda_function" "aggregator" {
 
   # Place the Lambda inside our private network for secure egress.
   vpc_config {
-    subnet_ids         = data.terraform_remote_state.network.outputs.private_subnet_ids
+    # Using values() to correctly convert the map of subnet IDs into a list.
+    subnet_ids         = values(data.terraform_remote_state.network.outputs.private_subnet_ids)
     security_group_ids = [aws_security_group.aggregator_lambda_sg.id]
   }
 
@@ -207,7 +191,6 @@ resource "aws_lambda_function" "aggregator" {
 # Section 4: The SQS Trigger
 # This connects the SQS queue to the Lambda, making the architecture event-driven.
 # -----------------------------------------------------------------------------
-
 resource "aws_lambda_event_source_mapping" "sqs_trigger" {
   event_source_arn                   = data.terraform_remote_state.stateful.outputs.main_queue_arn
   function_name                      = aws_lambda_function.aggregator.arn

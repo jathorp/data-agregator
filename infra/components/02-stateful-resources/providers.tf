@@ -1,5 +1,4 @@
-# This file is identical to the one in the network component.
-# This consistency is key.
+# components/02-stateful-resources/providers.tf
 
 terraform {
     required_version = "~> 1.5"

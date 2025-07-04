@@ -5,12 +5,14 @@ output "vpc_id" {
   value       = aws_vpc.main.id
 }
 
+# UPDATED: Action 3 - Outputting a map is more flexible for consumers.
 output "private_subnet_ids" {
-  description = "A list of the private subnet IDs."
-  value       = [for s in aws_subnet.private : s.id]
+  description = "A map of private subnet IDs, keyed by Availability Zone."
+  value       = { for subnet in aws_subnet.private : subnet.availability_zone => subnet.id }
 }
 
+# UPDATED: Action 3
 output "public_subnet_ids" {
-  description = "A list of public subnet IDs, required for the mock ALB."
-  value       = [for s in aws_subnet.public : s.id]
+  description = "A map of public subnet IDs, keyed by Availability Zone."
+  value       = { for subnet in aws_subnet.public : subnet.availability_zone => subnet.id }
 }

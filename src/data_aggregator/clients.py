@@ -1,4 +1,5 @@
 # src/data_aggregator/clients.py
+
 import logging
 import time
 from typing import Any, BinaryIO, Tuple, Union
@@ -9,13 +10,13 @@ from botocore.exceptions import ClientError
 # Get a logger instance for this module.
 logger = logging.getLogger(__name__)
 
-# ... (S3Client and DynamoDBClient from previous correct version) ...
+
 class S3Client:
+    """A wrapper for S3 client operations, optimized for streams."""
     def __init__(self, s3_client: Any):
         self._client = s3_client
 
     def get_file_content_stream(self, bucket: str, key: str) -> Any:
-        """Returns the raw streaming body from the S3 object."""
         response = self._client.get_object(Bucket=bucket, Key=key)
         return response["Body"]
 
@@ -27,7 +28,9 @@ class S3Client:
             ExtraArgs={"Metadata": {"x-content-sha256": content_hash}},
         )
 
+
 class DynamoDBClient:
+    """A wrapper for DynamoDB client operations."""
     def __init__(self, dynamo_client: Any, table_name: str, ttl_attribute: str):
         self._client = dynamo_client
         self._table_name = table_name
@@ -46,14 +49,15 @@ class DynamoDBClient:
                 return False
             raise
 
+
 class NiFiClient:
+    """A wrapper for making HTTP requests to the NiFi endpoint."""
     def __init__(self, session: requests.Session, endpoint_url: str, auth: Tuple[str, str], connect_timeout: int = 5):
         self._session = session
         self._endpoint_url = endpoint_url
         self._auth = auth
-        self._connect_timeout = connect_timeout # Store connect timeout
+        self._connect_timeout = connect_timeout
 
-    # UPDATED: Accept a dynamic read_timeout
     def post_bundle(self, data: Union[bytes, BinaryIO], content_hash: str, read_timeout: int):
         headers = { "Content-Type": "application/gzip", "Content-Encoding": "gzip", "X-Content-SHA256": content_hash }
         response = self._session.post(
@@ -65,63 +69,79 @@ class NiFiClient:
         )
         response.raise_for_status()
 
-# NEW: The full CircuitBreakerClient
+
 class CircuitBreakerClient:
-    """Manages the state of the circuit breaker in DynamoDB."""
+    """
+    Manages the state of the circuit breaker in DynamoDB.
+    This implementation is self-healing, automatically transitioning from OPEN to
+    HALF_OPEN after a configured timeout period.
+    """
     def __init__(self, dynamo_client: Any, table_name: str, service_name: str = "NiFi"):
         self._client = dynamo_client
         self._table_name = table_name
         self._service_name = service_name
-        # TODO: These could be configurable
         self._failure_threshold = 3
         self._open_duration_seconds = 300 # 5 minutes
 
     def get_state(self) -> str:
-        """Gets the raw state of the circuit from DynamoDB."""
+        """
+        Gets the current state of the circuit from DynamoDB.
+        Atomically transitions the state from OPEN to HALF-OPEN if the timeout has expired.
+        """
         try:
             response = self._client.get_item(
                 TableName=self._table_name,
                 Key={"service_name": {"S": self._service_name}},
+                ConsistentRead=True # Use strong consistency for state checks
             )
-            return response.get("Item", {}).get("state", {}).get("S", "CLOSED")
-        except ClientError:
-            return "CLOSED" # Default to closed
+            item = response.get("Item")
+            if not item:
+                return "CLOSED"
 
-    def is_open(self) -> bool:
-        """Checks if the circuit is currently OPEN and the timeout hasn't expired."""
-        try:
-            item = self._client.get_item(...).get("Item") # simplified for brevity
-            if not item or item.get("state", {}).get("S") != "OPEN":
-                return False
+            state = item.get("state", {}).get("S", "CLOSED")
+            if state == "OPEN":
+                last_updated = int(item.get("last_updated", {}).get("N", "0"))
+                if time.time() - last_updated > self._open_duration_seconds:
+                    logger.warning("Circuit breaker timeout expired. Attempting to transition from OPEN to HALF_OPEN.")
+                    try:
+                        # Attempt to transition to HALF_OPEN, but only if it's still OPEN.
+                        # This prevents a race condition if another process already changed the state.
+                        self._client.update_item(
+                            TableName=self._table_name,
+                            Key={"service_name": {"S": self._service_name}},
+                            UpdateExpression="SET #S = :new_state, #LU = :now",
+                            ConditionExpression="#S = :old_state",
+                            ExpressionAttributeNames={"#S": "state", "#LU": "last_updated"},
+                            ExpressionAttributeValues={
+                                ":new_state": {"S": "HALF_OPEN"},
+                                ":old_state": {"S": "OPEN"},
+                                ":now": {"N": str(int(time.time()))}
+                            }
+                        )
+                        return "HALF_OPEN"
+                    except ClientError as e:
+                        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                            logger.warning("Failed to transition to HALF_OPEN; state was changed by another process. Re-fetching.")
+                            # State was changed by another invocation, re-fetch to be safe.
+                            return self.get_state()
+                        raise # Re-raise other DynamoDB errors
+                else:
+                    return "OPEN" # Still within the timeout period
+            else:
+                return state
 
-            last_updated = int(item.get("last_updated", {}).get("N", "0"))
-            if time.time() - last_updated > self._open_duration_seconds:
-                # The state is stale and OPEN. It should be moved to HALF-OPEN.
-                # A separate process (e.g., scheduled Lambda) should do this.
-                # For now, this check prevents getting stuck in OPEN forever.
-                logger.info("Circuit breaker state is OPEN but timeout has expired.")
-                return False # Allow a request through to test the waters.
-            return True
-        except ClientError:
-            return False
-
-    def set_state(self, state: str):
-        self._client.put_item(
-            TableName=self._table_name,
-            Item={
-                "service_name": {"S": self._service_name},
-                "state": {"S": state},
-                "failure_count": {"N": "0"}, # Reset count on any state change
-                "last_updated": {"N": str(int(time.time()))},
-            },
-        )
+        except ClientError as e:
+            logger.error("Error getting circuit breaker state. Defaulting to CLOSED.", exc_info=e)
+            return "CLOSED"
 
     def record_success(self):
-        """Resets the failure count and ensures the circuit is CLOSED."""
+        """Resets the failure count and sets the circuit to CLOSED."""
+        logger.info("Recording successful delivery. Setting circuit to CLOSED.")
         self.set_state("CLOSED")
 
     def record_failure(self):
         """Increments the failure count and potentially opens the circuit."""
+        logger.warning("Recording delivery failure. Incrementing failure count.")
         try:
             response = self._client.update_item(
                 TableName=self._table_name,
@@ -131,9 +151,26 @@ class CircuitBreakerClient:
                 ReturnValues="UPDATED_NEW",
             )
             new_count = int(response["Attributes"]["failure_count"]["N"])
+
+            logger.info(f"Updated failure count to {new_count}.")
             if new_count >= self._failure_threshold:
+                logger.error(f"Failure threshold of {self._failure_threshold} reached. Opening circuit.")
                 self.set_state("OPEN")
         except ClientError as e:
             logger.error("Failed to update failure count. Setting state to OPEN as a fallback.", exc_info=e)
-            # If update fails (e.g., item doesn't exist), just set it to OPEN directly.
             self.set_state("OPEN")
+
+    def set_state(self, state: str):
+        """A helper method to set a specific state in DynamoDB."""
+        try:
+            self._client.put_item(
+                TableName=self._table_name,
+                Item={
+                    "service_name": {"S": self._service_name},
+                    "state": {"S": state},
+                    "failure_count": {"N": "0"},
+                    "last_updated": {"N": str(int(time.time()))},
+                },
+            )
+        except ClientError as e:
+            logger.error(f"Failed to set circuit breaker state to {state}", exc_info=e)

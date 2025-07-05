@@ -16,9 +16,9 @@ data "terraform_remote_state" "security" {
 # S3 bucket policy to enforce TLS for the landing bucket
 data "aws_iam_policy_document" "enforce_tls_landing" {
   statement {
-    sid       = "EnforceTLSRequestsOnly"
-    effect    = "Deny"
-    actions   = ["s3:*"]
+    sid     = "EnforceTLSRequestsOnly"
+    effect  = "Deny"
+    actions = ["s3:*"]
     resources = [
       aws_s3_bucket.landing.arn,
       "${aws_s3_bucket.landing.arn}/*",
@@ -38,9 +38,9 @@ data "aws_iam_policy_document" "enforce_tls_landing" {
 # S3 bucket policy to enforce TLS for the archive bucket
 data "aws_iam_policy_document" "enforce_tls_archive" {
   statement {
-    sid       = "EnforceTLSRequestsOnly"
-    effect    = "Deny"
-    actions   = ["s3:*"]
+    sid     = "EnforceTLSRequestsOnly"
+    effect  = "Deny"
+    actions = ["s3:*"]
     resources = [
       aws_s3_bucket.archive.arn,
       "${aws_s3_bucket.archive.arn}/*",

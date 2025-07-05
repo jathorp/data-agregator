@@ -59,7 +59,7 @@ for component in "${COMPONENTS[@]}"; do
 
   # Run Terraform commands.
   echo "   Running terraform init..."
-  terraform init -input=false -backend-config="$BACKEND_CONFIG"
+terraform init -input=false -reconfigure -backend-config="$BACKEND_CONFIG"
 
   echo "   Running terraform apply..."
   terraform apply -input=false -auto-approve \

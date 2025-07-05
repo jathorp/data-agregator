@@ -64,7 +64,6 @@ env/
 venv/
 
 # Build artifacts for Lambda
-lambda_package.zip
 lambda_layers/
 
 # ======================================================================================

@@ -3,18 +3,17 @@
 data "terraform_remote_state" "stateful" {
   backend = "s3"
   config = {
-    bucket = "data-agregator-tfstate-2-dev"
-    # UPDATED: Action 1 - Corrected the key to match the stateful component's path.
-    key    = "dev/components/02-stateful-resources.tfstate"
-    region = "eu-west-2"
+    bucket = var.remote_state_bucket
+    key    = "${var.environment_name}/components/02-stateful-resources.tfstate"
+    region = var.aws_region
   }
 }
 
 data "terraform_remote_state" "application" {
   backend = "s3"
   config = {
-    bucket = "data-agregator-tfstate-2-dev"
-    key    = "dev/components/03-application.tfstate"
-    region = "eu-west-2"
+    bucket = var.remote_state_bucket
+    key    = "${var.environment_name}/components/03-application.tfstate"
+    region = var.aws_region
   }
 }

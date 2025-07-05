@@ -1,30 +1,5 @@
 # infra/components/03-application/main.tf
 
-# -----------------------------------------------------------------------------
-# Data Sources
-# -----------------------------------------------------------------------------
-
-data "terraform_remote_state" "network" {
-  backend = "s3"
-  config = {
-    bucket = "data-agregator-tfstate-2-dev"
-    key    = "dev/components/01-network.tfstate"
-    region = "eu-west-2"
-  }
-}
-
-data "terraform_remote_state" "stateful" {
-  backend = "s3"
-  config = {
-    bucket = "data-agregator-tfstate-2-dev"
-    key    = "dev/components/02-stateful-resources.tfstate"
-    region = "eu-west-2"
-  }
-}
-
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
-
 
 locals {
   common_tags = {

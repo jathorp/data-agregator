@@ -12,3 +12,47 @@ data "terraform_remote_state" "security" {
     region = var.aws_region
   }
 }
+
+# S3 bucket policy to enforce TLS for the landing bucket
+data "aws_iam_policy_document" "enforce_tls_landing" {
+  statement {
+    sid       = "EnforceTLSRequestsOnly"
+    effect    = "Deny"
+    actions   = ["s3:*"]
+    resources = [
+      aws_s3_bucket.landing.arn,
+      "${aws_s3_bucket.landing.arn}/*",
+    ]
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+# S3 bucket policy to enforce TLS for the archive bucket
+data "aws_iam_policy_document" "enforce_tls_archive" {
+  statement {
+    sid       = "EnforceTLSRequestsOnly"
+    effect    = "Deny"
+    actions   = ["s3:*"]
+    resources = [
+      aws_s3_bucket.archive.arn,
+      "${aws_s3_bucket.archive.arn}/*",
+    ]
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}

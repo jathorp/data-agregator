@@ -23,6 +23,7 @@ echo "🚀 Starting deployment for environment: $ENVIRONMENT"
 echo "-----------------------------------------------------"
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+PROJECT_ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 ENV_DIR="$SCRIPT_DIR/environments/$ENVIRONMENT"
 
 echo "🔹 Checking Terraform code formatting..."
@@ -36,22 +37,33 @@ for component in "${COMPONENTS[@]}"; do
   echo "-----------------------------------------------------"
 
   COMPONENT_DIR="$SCRIPT_DIR/components/$component"
-  BACKEND_CONFIG="$ENV_DIR/$component.backend.tfvars"
-  COMMON_VARS="$ENV_DIR/common.tfvars"
-  COMPONENT_VARS="$ENV_DIR/${component#*-}.tfvars"
-
   cd "$COMPONENT_DIR"
 
   echo "   Running terraform init..."
-  # Init is the only place we need the specific backend config file.
-  terraform init -input=false -reconfigure -backend-config="$BACKEND_CONFIG"
+  terraform init -input=false -reconfigure -backend-config="$ENV_DIR/$component.backend.tfvars"
+
+  # --- CORRECTED: Use an array for optional arguments ---
+  # This makes the script robust and passes variables only where needed.
+  optional_args=()
+
+  # Add common variables if the file exists.
+  if [ -f "$ENV_DIR/common.tfvars" ]; then
+    optional_args+=(-var-file "$ENV_DIR/common.tfvars")
+  fi
+
+  # Add component-specific variables if the file exists.
+  COMPONENT_VARS_PATH="$ENV_DIR/${component#*-}.tfvars"
+  if [ -f "$COMPONENT_VARS_PATH" ]; then
+    optional_args+=(-var-file "$COMPONENT_VARS_PATH")
+  fi
+
+  # Add the lambda artifact path ONLY for the application component.
+  if [ "$component" == "03-application" ]; then
+    optional_args+=(-var "lambda_artifact_path=${PROJECT_ROOT_DIR}/dist/lambda.zip")
+  fi
 
   echo "   Running terraform apply..."
-  # The apply command is simple again. All config is in .tfvars files.
-  terraform apply -input=false -auto-approve \
-    -var-file="$COMMON_VARS" \
-    -var-file="$COMPONENT_VARS" \
-    -var "lambda_artifact_path=${SCRIPT_DIR}/../lambda_package.zip"
+  terraform apply -input=false -auto-approve "${optional_args[@]}"
 
   cd "$SCRIPT_DIR"
 done

@@ -99,6 +99,7 @@ resource "aws_cloudwatch_metric_alarm" "sqs_inbound_anomaly" {
   comparison_operator = "GreaterThanUpperThreshold"
   evaluation_periods  = 2
   alarm_description   = "WARNING: An anomalous spike in incoming S3 files has been detected. Check for misconfigured clients or unexpected costs."
+  threshold_metric_id = "m1"
 
   metric_query {
     id = "m1"

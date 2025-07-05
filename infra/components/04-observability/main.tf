@@ -118,9 +118,9 @@ resource "aws_cloudwatch_metric_alarm" "sqs_inbound_anomaly" {
 
   # ── Anomaly-detection band (±2 σ) ──
   metric_query {
-    id         = "e1"
-    expression = "ANOMALY_DETECTION_BAND(m1, 2)"
-    label      = "Expected range (2σ)"
+    id          = "e1"
+    expression  = "ANOMALY_DETECTION_BAND(m1, 2)"
+    label       = "Expected range (2σ)"
     return_data = false # This query provides the threshold, not the data to evaluate
   }
 

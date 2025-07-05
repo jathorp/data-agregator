@@ -125,7 +125,7 @@ resource "aws_lambda_function" "aggregator" {
   source_code_hash = filebase64sha256("${path.module}/../../../dist/lambda.zip")
 
   ephemeral_storage {
-    size_in_mb = var.lambda_ephemeral_storage_size
+    size = var.lambda_ephemeral_storage_size
   }
 
   vpc_config {

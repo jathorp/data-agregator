@@ -1,115 +1,220 @@
-# tests/unit/test_app.py
+"""
+tests/unit/test_app.py
+
+Comprehensive unit-tests for src.data_aggregator.app
+----------------------------------------------------
+ * zero real AWS / HTTP traffic
+ * covers every branch we own
+ * < 1 s runtime
+"""
 
 import json
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
-from aws_lambda_powertools.utilities.typing import LambdaContext
+import requests
+from aws_lambda_powertools.utilities.data_classes.sqs_event import SQSRecord
 
-# The environment is now set by conftest.py, so we can import at the top level.
 from src.data_aggregator import app
+from src.data_aggregator.app import (
+    SQSBatchProcessingError,
+    _process_successful_batch,
+    make_record_handler,
+)
 
-
-# --- Fixtures (These are correct and can remain unchanged) ---
+# ------------------------------------------------------------------ #
+#                           FIXTURES                                 #
+# ------------------------------------------------------------------ #
 
 
 @pytest.fixture
-def sqs_event_factory():
-    """A pytest fixture to create mock SQS events for testing."""
+def mock_dependencies():
+    """Replace `Dependencies` with a loose mock we can freely shape."""
+    with patch("src.data_aggregator.app.Dependencies") as mock_cls:
+        deps = MagicMock()
+        mock_cls.return_value = deps
 
-    def _factory(s3_records: list):
-        return {
-            "Records": [
-                {
-                    "messageId": f"message_{i}",
-                    "receiptHandle": "handle",
-                    "body": json.dumps({"Records": [record]}),
-                    "attributes": {},
-                    "messageAttributes": {},
-                    "md5OfBody": "...",
-                    "eventSource": "aws:sqs",
-                    "eventSourceARN": "arn:aws:sqs:eu-west-2:12345:test-queue",
-                    "awsRegion": "eu-west-2",
+        # hard-coded attrs used in production code
+        deps.idempotency_ttl_seconds = 7 * 86_400
+        deps.dynamodb_client = MagicMock()
+        deps.circuit_breaker_client = MagicMock()
+        deps.nifi_client = MagicMock()
+        deps.metrics = MagicMock()
+
+        yield deps
+
+
+@pytest.fixture
+def mock_processor():
+    """Stub Powertools BatchProcessor so no internal logic runs."""
+    with patch("src.data_aggregator.app.processor") as proc:
+        yield proc
+
+
+@pytest.fixture
+def mock_lambda_context():
+    """Minimal Lambda context stub."""
+    ctx = MagicMock(aws_request_id="test-req-id")
+    ctx.get_remaining_time_in_millis.return_value = 30_000
+    return ctx
+
+
+# ------------------------------------------------------------------ #
+#                           HELPERS                                  #
+# ------------------------------------------------------------------ #
+
+
+def _create_sqs_record(obj_key: str, bucket: str = "unit-bucket") -> SQSRecord:
+    """Fabricate a Powertools SQSRecord with a wrapped S3 event."""
+    s3_event = {
+        "Records": [
+            {
+                "s3": {
+                    "bucket": {"name": bucket},
+                    "object": {"key": obj_key},
                 }
-                for i, record in enumerate(s3_records)
-            ]
-        }
-
-    return _factory
-
-
-@pytest.fixture
-def lambda_context() -> LambdaContext:
-    """A pytest fixture to create a mock Lambda context object."""
-    context = MagicMock(spec=LambdaContext)
-    context.aws_request_id = "test_request_12345"
-    context.get_remaining_time_in_millis.return_value = 30000
-    return context
-
-
-# --- Test Function ---
-
-
-# We still patch the clients and the core logic function to isolate the handler.
-# The key is that these patches will now correctly intercept the calls
-# inside _initialize_clients() when the handler is executed.
-@patch("src.data_aggregator.app.process_and_deliver_batch")
-@patch("boto3.client")  # Patch boto3.client directly to control all client creation
-def test_handler_happy_path(
-    mock_boto3_client,
-    mock_process_batch_func,
-    sqs_event_factory,
-    lambda_context,
-    monkeypatch,  # Use monkeypatch to set environment variables
-):
-    """Tests the main handler on a successful run using the lazy-init pattern."""
-    # 1. ARRANGE
-    # Set all required environment variables using monkeypatch, which is active
-    # before the handler runs and calls _initialize_clients.
-    monkeypatch.setenv("IDEMPOTENCY_TABLE_NAME", "test-idempotency-table")
-    monkeypatch.setenv("CIRCUIT_BREAKER_TABLE_NAME", "test-circuit-breaker-table")
-    monkeypatch.setenv("ARCHIVE_BUCKET_NAME", "test-archive-bucket")
-    monkeypatch.setenv("NIFI_ENDPOINT_URL", "https://test.nifi.endpoint")
-    monkeypatch.setenv(
-        "NIFI_SECRET_ARN", "arn:aws:secretsmanager:eu-west-2:12345:secret:test"
-    )
-    monkeypatch.setenv("DYNAMODB_TTL_ATTRIBUTE", "ttl")
-    monkeypatch.setenv("IDEMPOTENCY_TTL_DAYS", "7")
-    monkeypatch.setenv("AWS_REGION", "eu-west-2")  # Set the crucial region variable
-
-    # Configure the mock Boto3 clients that will be created
-    mock_dynamodb = MagicMock()
-    mock_secretsmanager = MagicMock()
-    # Configure boto3.client to return the correct mock for each service
-    mock_boto3_client.side_effect = lambda service_name: {
-        "dynamodb": mock_dynamodb,
-        "secretsmanager": mock_secretsmanager,
-    }.get(service_name)
-
-    # Configure the behavior of the mocked clients
-    mock_dynamodb.put_item.return_value = {}  # Simulate successful idempotency write
-    mock_secretsmanager.get_secret_value.return_value = {
-        "SecretString": '{"username": "testuser", "password": "testpassword"}'
-    }
-
-    # We still need to mock our custom CircuitBreakerClient's methods
-    with patch("src.data_aggregator.app.circuit_breaker_client") as mock_cb:
-        mock_cb.get_state.return_value = "CLOSED"
-
-        s3_records = [
-            {"s3": {"bucket": {"name": "test"}, "object": {"key": "file.txt"}}}
+            }
         ]
-        event = sqs_event_factory(s3_records)
+    }
+    body = json.dumps(s3_event)
+    return SQSRecord({"body": body, "messageId": f"msg-for-{obj_key}"})
 
-        # 2. ACT
-        # The first time this runs, it will trigger _initialize_clients(), which
-        # will now be fully mocked.
-        response = app.handler(event, lambda_context)
 
-        # 3. ASSERT
-        # Verify that our core logic and client methods were called as expected.
-        mock_dynamodb.put_item.assert_called_once()
-        mock_process_batch_func.assert_called_once()
-        mock_cb.record_success.assert_called_once()
-        assert "batchItemFailures" not in response or not response["batchItemFailures"]
+# ------------------------------------------------------------------ #
+#                LAYER 1 – make_record_handler()                     #
+# ------------------------------------------------------------------ #
+
+
+class TestRecordHandler:
+    """Unit-tests for per-record logic."""
+
+    def test_processes_new_key_successfully(self, mock_dependencies):
+        mock_dependencies.dynamodb_client.check_and_set_idempotency.return_value = True
+        handler = make_record_handler(mock_dependencies)
+        record = _create_sqs_record("new.txt")
+
+        result = handler(record)
+
+        mock_dependencies.dynamodb_client.check_and_set_idempotency.assert_called_once()
+        assert result["s3"]["object"]["key"] == "new.txt"
+
+    def test_skips_duplicate_key(self, mock_dependencies):
+        mock_dependencies.dynamodb_client.check_and_set_idempotency.return_value = False
+        handler = make_record_handler(mock_dependencies)
+        record = _create_sqs_record("dup.txt")
+
+        result = handler(record)
+
+        mock_dependencies.dynamodb_client.check_and_set_idempotency.assert_called_once()
+        assert result == {}
+
+    def test_raises_error_for_malformed_json(self, mock_dependencies):
+        handler = make_record_handler(mock_dependencies)
+        bad_record = SQSRecord({"body": "not json", "messageId": "bad-id"})
+
+        with pytest.raises(ValueError, match="Malformed SQS message body"):
+            handler(bad_record)
+
+
+# ------------------------------------------------------------------ #
+#        LAYER 2 – handler()  (stage-2 orchestration wrapper)        #
+# ------------------------------------------------------------------ #
+
+
+class TestHandlerBatchLogic:
+    """Focus on control-flow around _process_successful_batch."""
+
+    @patch.object(app, "_process_successful_batch", autospec=True, return_value=[])
+    def test_happy_path_calls_processing_function(
+        self,
+        mock_process_batch,
+        mock_dependencies,
+        mock_processor,
+        mock_lambda_context,
+    ):
+        s3_record = {"s3": {"object": {"key": "file.txt"}}}
+        mock_processor.success_messages = [MagicMock(result=s3_record)]
+        mock_processor.response.return_value = {"batchItemFailures": []}
+
+        app.handler({"Records": []}, mock_lambda_context)
+
+        mock_process_batch.assert_called_once()
+
+    @patch.object(
+        app,
+        "_process_successful_batch",
+        autospec=True,
+        side_effect=SQSBatchProcessingError("Circuit breaker open"),
+    )
+    def test_when_processing_fails_returns_all_items(
+        self,
+        mock_process_batch,
+        mock_dependencies,
+        mock_processor,
+        mock_lambda_context,
+    ):
+        success1 = MagicMock(result={"s3": ...}, message_id="id-1")
+        success2 = MagicMock(result={"s3": ...}, message_id="id-2")
+        mock_processor.success_messages = [success1, success2]
+        mock_processor.response.return_value = {"batchItemFailures": []}
+
+        result = app.handler({"Records": []}, mock_lambda_context)
+
+        assert result["batchItemFailures"] == [
+            {"itemIdentifier": "id-1"},
+            {"itemIdentifier": "id-2"},
+        ]
+
+
+# ------------------------------------------------------------------ #
+#           LAYER 3 – _process_successful_batch() itself             #
+# ------------------------------------------------------------------ #
+
+
+@patch("src.data_aggregator.app.deliver_records")
+class TestProcessSuccessfulBatch:
+    """Fine-grained tests of the core delivery / CB logic."""
+
+    def test_delivers_batch_when_circuit_closed(
+        self,
+        mock_deliver,
+        mock_dependencies,
+        mock_lambda_context,
+    ):
+        mock_dependencies.circuit_breaker_client.get_state.return_value = "CLOSED"
+        good = MagicMock(result={"s3": ...})
+        failures = _process_successful_batch([good], mock_lambda_context, mock_dependencies)
+
+        mock_deliver.assert_called_once()
+        mock_dependencies.circuit_breaker_client.record_success.assert_called_once()
+        assert failures == []
+
+    def test_raises_exception_when_circuit_open(
+        self,
+        mock_deliver,
+        mock_dependencies,
+        mock_lambda_context,
+    ):
+        mock_dependencies.circuit_breaker_client.get_state.return_value = "OPEN"
+        with pytest.raises(SQSBatchProcessingError, match="Circuit Breaker is open"):
+            _process_successful_batch([MagicMock(result={"s3": ...})],
+                                      mock_lambda_context,
+                                      mock_dependencies)
+        mock_deliver.assert_not_called()
+
+    def test_records_failure_and_bubbles_up_on_delivery_error(
+        self,
+        mock_deliver,
+        mock_dependencies,
+        mock_lambda_context,
+    ):
+        mock_dependencies.circuit_breaker_client.get_state.return_value = "CLOSED"
+        mock_deliver.side_effect = requests.exceptions.ConnectionError("boom")
+
+        with pytest.raises(SQSBatchProcessingError, match="Downstream connection error"):
+            _process_successful_batch([MagicMock(result={"s3": ...})],
+                                      mock_lambda_context,
+                                      mock_dependencies)
+
+        mock_deliver.assert_called_once()
+        mock_dependencies.circuit_breaker_client.record_failure.assert_called_once()

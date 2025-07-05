@@ -49,12 +49,6 @@ variable "nifi_secret_name" {
   type        = string
 }
 
-# The ARN of the IAM role responsible for administering the KMS key.
-variable "kms_admin_role_arn" {
-  description = "ARN of the IAM role that will have administrative permissions on the KMS key."
-  type        = string
-}
-
 # The name for the Lambda's IAM role, which will be created here.
 variable "lambda_role_name" {
   description = "The name for the Lambda function's IAM role."

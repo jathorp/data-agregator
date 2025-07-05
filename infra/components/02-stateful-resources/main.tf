@@ -20,6 +20,15 @@ resource "aws_kms_key" "app_key" {
   tags                    = local.common_tags
 }
 
+data "terraform_remote_state" "security" {
+  backend = "s3"
+  config = {
+    bucket = "data-agregator-tfstate-2-dev" # Use your actual tfstate bucket name
+    key    = "dev/components/00-security.tfstate"
+    region = "eu-west-2" # Use your actual region
+  }
+}
+
 data "aws_iam_policy_document" "kms_policy" {
   # Statement 1: Gives full administrative control to the root user (fail-safe)
   # and the specified infrastructure admin role.
@@ -32,7 +41,8 @@ data "aws_iam_policy_document" "kms_policy" {
       type = "AWS"
       identifiers = [
         "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root",
-        var.kms_admin_role_arn
+        # Use the output from the security component instead of a variable
+        data.terraform_remote_state.security.outputs.kms_admin_role_arn
       ]
     }
   }

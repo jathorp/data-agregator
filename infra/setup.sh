@@ -10,6 +10,7 @@ ENVIRONMENT=$1
 
 # An array defining the components in the correct deployment order.
 COMPONENTS=(
+  "00-security"
   "01-network"
   "02-stateful-resources"
   "03-application"

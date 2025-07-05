@@ -3,7 +3,7 @@
 # --- Configuration ---
 # The name of the S3 bucket to create for storing Terraform state.
 # This MUST match the bucket name in your *.backend.tfvars files.
-BUCKET_NAME="data-aggregator-tfstate-2-dev"
+BUCKET_NAME="data-aggregator-tfstate-dev"
 REGION="eu-west-2"
 # --- End Configuration ---
 

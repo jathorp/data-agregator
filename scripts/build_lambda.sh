@@ -30,8 +30,9 @@ rsync -a --exclude='tests' src/ build/
 
 # 4. zip the contents of the build directory
 echo "🔹 Creating zip archive..."
+mkdir -p dist # Ensure the dist directory exists
 cd build
-zip -qr ../lambda_package.zip .
+zip -qr ../dist/lambda.zip .
 cd .. # Go back to the project root
 
-echo "✅ Lambda artifact created at $(pwd)/lambda_package.zip"
+echo "✅ Lambda artifact created at $(pwd)/dist/lambda.zip"

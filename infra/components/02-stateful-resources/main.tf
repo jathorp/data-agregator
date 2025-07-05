@@ -18,9 +18,6 @@ resource "aws_kms_key" "app_key" {
   deletion_window_in_days = 10
   enable_key_rotation     = true
   tags                    = local.common_tags
-
-  # Custom, least-privilege key policy
-  policy = data.aws_iam_policy_document.kms_policy.json
 }
 
 data "aws_iam_policy_document" "kms_policy" {
@@ -32,7 +29,7 @@ data "aws_iam_policy_document" "kms_policy" {
     actions   = ["kms:*"]
     resources = ["*"]
     principals {
-      type = "AWS"
+      type        = "AWS"
       identifiers = [
         "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root",
         var.kms_admin_role_arn
@@ -53,11 +50,18 @@ data "aws_iam_policy_document" "kms_policy" {
     ]
     resources = ["*"]
     principals {
-      type = "AWS"
-      # UPDATED: Points to the new, local IAM role resource.
+      type        = "AWS"
+      # This reference is now safe because this policy is applied AFTER the role is created.
       identifiers = [aws_iam_role.lambda_exec_role.arn]
     }
   }
+}
+
+# NEW resource to attach the policy to the existing key.
+# This happens AFTER both the key and the IAM role are created, solving the race condition.
+resource "aws_kms_key_policy" "app_key_policy" {
+  key_id = aws_kms_key.app_key.id
+  policy = data.aws_iam_policy_document.kms_policy.json
 }
 
 # --- NEW: IAM Role for the Lambda Function ---

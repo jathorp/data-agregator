@@ -52,7 +52,7 @@ module "mock_nifi_endpoint" {
 # Section 1: IAM Policy & Attachment for the Lambda Function
 # -----------------------------------------------------------------------------
 resource "aws_iam_policy" "aggregator_lambda_policy" {
-  name        = "${var.lambda_function_name}-permissions"
+  name_prefix = "${var.lambda_function_name}-permissions-"
   description = "Permissions for the data aggregator Lambda function"
 
   policy = jsonencode({
@@ -125,7 +125,6 @@ resource "aws_lambda_function" "aggregator" {
   source_code_hash = filebase64sha256("${path.module}/../../../dist/lambda.zip")
 
   ephemeral_storage {
-    # CORRECTED: This line was missing and now correctly uses the variable.
     size_in_mb = var.lambda_ephemeral_storage_size
   }
 

@@ -56,7 +56,7 @@ resource "aws_iam_policy" "aggregator_lambda_policy" {
   description = "Permissions for the data aggregator Lambda function"
 
   policy = jsonencode({
-    Version   = "2012-10-17"
+    Version = "2012-10-17"
     Statement = [
       {
         Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
@@ -136,14 +136,14 @@ resource "aws_lambda_function" "aggregator" {
 
   environment {
     variables = {
-      ARCHIVE_BUCKET_NAME        = data.terraform_remote_state.stateful.outputs.archive_bucket_id
-      IDEMPOTENCY_TABLE_NAME     = data.terraform_remote_state.stateful.outputs.idempotency_table_name
-      CIRCUIT_BREAKER_TABLE_NAME = data.terraform_remote_state.stateful.outputs.circuit_breaker_table_name
-      NIFI_SECRET_ARN            = data.terraform_remote_state.stateful.outputs.nifi_secret_arn
-      NIFI_ENDPOINT_URL          = var.environment_name == "dev" ? "https://${module.mock_nifi_endpoint[0].endpoint_dns_name}" : var.nifi_endpoint_url
-      LOG_LEVEL                  = "INFO"
-      DYNAMODB_TTL_ATTRIBUTE     = "ttl"
-      IDEMPOTENCY_TTL_DAYS       = var.idempotency_ttl_days
+      ARCHIVE_BUCKET_NAME               = data.terraform_remote_state.stateful.outputs.archive_bucket_id
+      IDEMPOTENCY_TABLE_NAME            = data.terraform_remote_state.stateful.outputs.idempotency_table_name
+      CIRCUIT_BREAKER_TABLE_NAME        = data.terraform_remote_state.stateful.outputs.circuit_breaker_table_name
+      NIFI_SECRET_ARN                   = data.terraform_remote_state.stateful.outputs.nifi_secret_arn
+      NIFI_ENDPOINT_URL                 = var.environment_name == "dev" ? "https://${module.mock_nifi_endpoint[0].endpoint_dns_name}" : var.nifi_endpoint_url
+      LOG_LEVEL                         = "INFO"
+      DYNAMODB_TTL_ATTRIBUTE            = "ttl"
+      IDEMPOTENCY_TTL_DAYS              = var.idempotency_ttl_days
       NIFI_CONNECT_TIMEOUT_SECONDS      = var.nifi_connect_timeout_seconds
       CIRCUIT_BREAKER_FAILURE_THRESHOLD = var.circuit_breaker_failure_threshold
       CIRCUIT_BREAKER_OPEN_SECONDS      = var.circuit_breaker_open_seconds

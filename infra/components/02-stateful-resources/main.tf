@@ -32,7 +32,7 @@ data "aws_iam_policy_document" "kms_policy" {
     actions   = ["kms:*"]
     resources = ["*"]
     principals {
-      type        = "AWS"
+      type = "AWS"
       identifiers = [
         "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root",
         var.kms_admin_role_arn
@@ -53,7 +53,7 @@ data "aws_iam_policy_document" "kms_policy" {
     ]
     resources = ["*"]
     principals {
-      type        = "AWS"
+      type = "AWS"
       # UPDATED: Points to the new, local IAM role resource.
       identifiers = [aws_iam_role.lambda_exec_role.arn]
     }
@@ -86,10 +86,16 @@ resource "aws_s3_bucket" "access_logs" {
   # Action 3: Allow easy cleanup in non-prod environments.
   force_destroy = true
 }
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "access_logs" {
   bucket = aws_s3_bucket.access_logs.id
-  rule { apply_server_side_encryption_by_default { sse_algorithm = "AES256" } }
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
 }
+
 resource "aws_s3_bucket_public_access_block" "access_logs" {
   bucket                  = aws_s3_bucket.access_logs.id
   block_public_acls       = true
@@ -97,6 +103,7 @@ resource "aws_s3_bucket_public_access_block" "access_logs" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 }
+
 resource "aws_s3_bucket_lifecycle_configuration" "access_logs" {
   bucket = aws_s3_bucket.access_logs.id
   rule {
@@ -161,8 +168,10 @@ data "aws_iam_policy_document" "enforce_tls_landing" {
       aws_s3_bucket.landing.arn,
       "${aws_s3_bucket.landing.arn}/*",
     ]
-    principals { type = "*"
-      identifiers = ["*"] }
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
     condition {
       test     = "Bool"
       variable = "aws:SecureTransport"
@@ -230,8 +239,10 @@ data "aws_iam_policy_document" "enforce_tls_archive" {
       aws_s3_bucket.archive.arn,
       "${aws_s3_bucket.archive.arn}/*",
     ]
-    principals { type = "*"
-      identifiers = ["*"] }
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
     condition {
       test     = "Bool"
       variable = "aws:SecureTransport"
@@ -288,10 +299,14 @@ resource "aws_dynamodb_table" "idempotency" {
   name         = var.idempotency_table_name
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "object_key"
-  attribute { name = "object_key"
-    type = "S" }
-  ttl { attribute_name = "ttl"
-    enabled = true }
+  attribute {
+    name = "object_key"
+    type = "S"
+  }
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
   point_in_time_recovery { enabled = true }
   server_side_encryption {
     enabled     = true
@@ -304,8 +319,10 @@ resource "aws_dynamodb_table" "circuit_breaker" {
   name         = var.circuit_breaker_table_name
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "service_name"
-  attribute { name = "service_name"
-    type = "S" }
+  attribute {
+    name = "service_name"
+    type = "S"
+  }
   point_in_time_recovery { enabled = true }
   server_side_encryption {
     enabled     = true
@@ -317,7 +334,7 @@ resource "aws_dynamodb_table" "circuit_breaker" {
 
 # --- SECRETS MANAGER ---
 resource "aws_secretsmanager_secret" "nifi_credentials" {
-  name        = var.nifi_secret_name
-  kms_key_id  = aws_kms_key.app_key.arn # Encrypt the secret with our CMK
-  tags        = merge(local.common_tags, { Name = var.nifi_secret_name })
+  name       = var.nifi_secret_name
+  kms_key_id = aws_kms_key.app_key.arn # Encrypt the secret with our CMK
+  tags       = merge(local.common_tags, { Name = var.nifi_secret_name })
 }

@@ -101,7 +101,7 @@ resource "aws_cloudwatch_metric_alarm" "sqs_inbound_anomaly" {
   alarm_description   = "WARNING: An anomalous spike in incoming S3 files has been detected. Check for misconfigured clients or unexpected costs."
 
   metric_query {
-    id          = "m1"
+    id = "m1"
     metric {
       metric_name = "NumberOfMessagesSent"
       namespace   = "AWS/SQS"

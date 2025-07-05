@@ -2,10 +2,10 @@
 
 # Variables specific to the '03-application' component.
 
-lambda_function_name = "data-aggregator-processor-dev"
-lambda_handler       = "handler.lambda_handler"
-lambda_runtime       = "python3.13"
-lambda_memory_size   = 512
+lambda_function_name          = "data-aggregator-processor-dev"
+lambda_handler                = "handler.lambda_handler"
+lambda_runtime                = "python3.13"
+lambda_memory_size            = 512
 lambda_ephemeral_storage_size = 2048
 
 # These are not used for the 'dev' environment because it uses the mock endpoint,

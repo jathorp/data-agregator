@@ -60,7 +60,7 @@ data "aws_iam_policy_document" "s3_policy" {
   statement {
     effect = "Allow"
     principals {
-      type        = "AWS"
+      type = "AWS"
       # This identifier correctly grants permission ONLY to the ELB service.
       identifiers = [data.aws_elb_service_account.current.arn]
     }

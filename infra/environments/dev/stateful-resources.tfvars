@@ -10,5 +10,5 @@ idempotency_table_name     = "data-aggregator-idempotency-dev"
 circuit_breaker_table_name = "data-agregator-circuit-breaker-dev"
 nifi_secret_name           = "data-aggregator/nifi-credentials-dev"
 # Note: Provide the actual ARN of a real administrative role here.
-kms_admin_role_arn         = "arn:aws:iam::123456789012:role/TerraformAdmin"
-lambda_role_name           = "data-aggregator-processor-role-dev"
+kms_admin_role_arn = "arn:aws:iam::123456789012:role/TerraformAdmin"
+lambda_role_name   = "data-aggregator-processor-role-dev"

@@ -1,18 +1,81 @@
+# ======================================================================================
+# General
+# ======================================================================================
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# IDE / Editor configuration files
+.vscode/
+.idea/
+
+# ======================================================================================
+# Terraform Core
+#
+# These files are generated locally during terraform init/plan/apply and should
+# never be committed to source control. Your state is managed by the S3 backend.
+# ======================================================================================
+# Local provider cache and modules
+.terraform/
+
+# Local state files
+*.tfstate
+*.tfstate.*
+
+# Crash log files
+crash.log
+crash.*.log
+
+# ======================================================================================
+# Terraform Variables
+#
+# EXCLUDE files that are likely to contain secrets or local developer overrides.
+# This forces the convention that all committed .tfvars files in the 'environments/'
+# directory are for non-secret configuration only.
+# ======================================================================================
+# Ignore standard terraform.tfvars files. Use named files like 'common.tfvars'.
+terraform.tfvars
+terraform.tfvars.json
+
+# Ignore auto-generated variable files.
+*.auto.tfvars
+*.auto.tfvars.json
+
+# Ignore any file explicitly named with a .secret suffix. This is a useful
+# convention for local testing where you might populate a file with real secrets
+# that are git-ignored by this rule.
+*.secret.tfvars
+
+# ======================================================================================
+# Python & Lambda
+#
+# As provided in your original file. These are correct.
+# ======================================================================================
 # Python-generated files
 __pycache__/
 *.py[oc]
 build/
 wheels/
 *.egg-info
+dist/
 
 # Virtual environments
-.venv
+.venv/
+env/
+venv/
 
-# Terraform files
-.terraform/
-*.tfstate
-*.tfstate.*
-*.tfvars.json
-
-# Build artifacts
+# Build artifacts for Lambda
 lambda_package.zip
+lambda_layers/
+
+# ======================================================================================
+# A Note on .terraform.lock.hcl
+#
+# You should COMMIT the '.terraform.lock.hcl' file that is generated inside each
+# of your component directories (e.g., 'components/00-security/.terraform.lock.hcl').
+# This file locks the specific versions of the providers you use, ensuring that
+# everyone on your team (and your CI/CD pipeline) uses the exact same provider
+# versions, preventing "works on my machine" problems.
+#
+# DO NOT add .terraform.lock.hcl to this gitignore file.
+# ======================================================================================

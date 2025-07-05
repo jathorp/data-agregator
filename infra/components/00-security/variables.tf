@@ -20,3 +20,11 @@ variable "kms_admin_role_name" {
   type        = string
   default     = "DataAggregator-KMS-Admin"
 }
+
+variable "kms_admin_principal_arns" {
+  description = "A list of IAM Principal ARNs (users, roles) that are allowed to assume the KMS Admin role."
+  type        = list(string)
+  # It's better to provide an empty list as a default and force the user
+  # to explicitly define the principals in their .tfvars file.
+  # This prevents accidentally deploying a role that nobody can assume.
+}

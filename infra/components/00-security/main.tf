@@ -5,14 +5,16 @@ data "aws_caller_identity" "current" {}
 resource "aws_iam_role" "kms_admin" {
   name = var.kms_admin_role_name
 
-  # This policy allows an IAM user/role in the same account to assume this role.
+  description = "Administrative role for managing KMS keys for the ${var.project_name} project. Assumable by defined administrators."
+
+  # Greatly restricted the trust policy ---
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
       Action = "sts:AssumeRole",
       Effect = "Allow",
       Principal = {
-        AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        AWS = var.kms_admin_principal_arns
       }
     }]
   })

@@ -93,18 +93,18 @@ resource "aws_cloudwatch_composite_alarm" "pipeline_outage" {
   tags = local.common_tags
 }
 
-# 5. Anomaly Detection for “Denial-of-Wallet” protection (WARNING)
+# 5. Anomaly-detection alarm – “Denial-of-Wallet” guard
 resource "aws_cloudwatch_metric_alarm" "sqs_inbound_anomaly" {
   alarm_name          = "${var.project_name}-sqs-inbound-anomaly"
-  comparison_operator = "GreaterThanUpperThreshold"
+  comparison_operator = "GreaterThanUpperThreshold"      # look only above the band
   evaluation_periods  = 2
-  threshold_metric_id = "e1" # ← Point at the anomaly detection band
-  alarm_description   = "WARNING: An anomalous spike in incoming SQS messages detected."
+  threshold_metric_id = "e1"                             # ← **band** query ID
+  alarm_description   = "WARNING: anomalous spike in SQS messages detected."
 
-  # ── Actual metric we care about ──
+  ### 1️⃣  Actual metric we care about
   metric_query {
     id          = "m1"
-    return_data = true # CloudWatch evaluates this value
+    return_data = true                                   # one of the two “watched” series
     metric {
       metric_name = "NumberOfMessagesSent"
       namespace   = "AWS/SQS"
@@ -116,12 +116,12 @@ resource "aws_cloudwatch_metric_alarm" "sqs_inbound_anomaly" {
     }
   }
 
-  # ── Anomaly-detection band (±2 σ) ──
+  ### 2️⃣  Anomaly-detection band around that metric
   metric_query {
-    id          = "e1"
+    id          = "e1"                                   # ID referenced above
     expression  = "ANOMALY_DETECTION_BAND(m1, 2)"
-    label       = "Expected range (2σ)"
-    return_data = false # This query provides the threshold, not the data to evaluate
+    label       = "Expected range (±2σ)"
+    return_data = true                                   # must be TRUE so CloudWatch “sees” it
   }
 
   alarm_actions = [aws_sns_topic.alerts_warning.arn]

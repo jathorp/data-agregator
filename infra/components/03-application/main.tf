@@ -65,7 +65,7 @@ resource "aws_iam_policy" "aggregator_lambda_policy" {
       },
       { Action = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"], Effect = "Allow", Resource = data.terraform_remote_state.stateful.outputs.main_queue_arn },
       { Action = "s3:GetObject", Effect = "Allow", Resource = "${data.terraform_remote_state.stateful.outputs.landing_bucket_arn}/*" },
-      { Action = ["s3:PutObject", "s3:PutObjectMetadata"], Effect = "Allow", Resource = "${data.terraform_remote_state.stateful.outputs.archive_bucket_arn}/*" },
+      { Action = ["s3:PutObject"], Effect = "Allow", Resource = "${data.terraform_remote_state.stateful.outputs.archive_bucket_arn}/*" },
       { Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"], Effect = "Allow", Resource = [data.terraform_remote_state.stateful.outputs.idempotency_table_arn, data.terraform_remote_state.stateful.outputs.circuit_breaker_table_arn] },
       { Action = "secretsmanager:GetSecretValue", Effect = "Allow", Resource = data.terraform_remote_state.stateful.outputs.nifi_secret_arn },
       { Action = ["ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DeleteNetworkInterface"], Effect = "Allow", Resource = "*" }

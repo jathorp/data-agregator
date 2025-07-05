@@ -20,7 +20,7 @@ This component is designed to be secure, environment-aware, and resilient.
 
 ### 3. Resilient SQS Trigger
 
-*   **What:** The `aws_lambda_event_source_mapping` resource connects the SQS queue to the Lambda function. It is configured with a batch size of 100 and a 10-second batching window to balance latency and cost.
+*   **What:** The `aws_lambda_event_source_mapping` resource connects the SQS queue to the Lambda function. It is configured with a batch size of 100 and a 5-second batching window to balance latency and cost.
 *   **Why:** Crucially, it enables the `ReportBatchItemFailures` feature. This allows the Lambda code to report partial failures within a batch, preventing a single bad message from blocking the entire pipeline and maximizing throughput (NFR-05).
 
 ### 4. Secure Network Placement

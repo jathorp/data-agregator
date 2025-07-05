@@ -16,9 +16,9 @@ variable "lambda_function_name" {
 }
 
 variable "lambda_handler" {
-  description = "The handler for the Lambda function (e.g., 'handler.lambda_handler')."
+  description = "The handler for the Lambda function (e.g., 'app.handler')."
   type        = string
-  default     = "handler.lambda_handler"
+  default     = "app.handler"
 }
 
 variable "lambda_runtime" {

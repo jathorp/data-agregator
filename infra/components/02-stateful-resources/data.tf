@@ -15,8 +15,7 @@ data "terraform_remote_state" "security" {
 }
 
 data "aws_iam_policy_document" "kms_policy" {
-  # Statement 1: Gives full administrative control to the root user (fail-safe)
-  # and the specified infrastructure admin role.
+  # Statement 1: Admin permissions
   statement {
     sid       = "EnableIAMUserPermissions"
     effect    = "Allow"
@@ -26,13 +25,12 @@ data "aws_iam_policy_document" "kms_policy" {
       type = "AWS"
       identifiers = [
         "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root",
-        # Use the output from the security component instead of a variable
         data.terraform_remote_state.security.outputs.kms_admin_role_arn
       ]
     }
   }
 
-  # Statement 2: Gives usage permissions to the application Lambda function's role.
+  # Statement 2: Lambda usage permissions
   statement {
     sid    = "AllowLambdaUsage"
     effect = "Allow"
@@ -43,38 +41,32 @@ data "aws_iam_policy_document" "kms_policy" {
       "kms:GenerateDataKey*",
       "kms:DescribeKey"
     ]
-    resources = ["*"]
+    resources = [aws_kms_key.app_key.arn]
     principals {
-      type = "AWS"
-      # This reference is now safe because this policy is applied AFTER the role is created.
+      type        = "AWS"
       identifiers = [aws_iam_role.lambda_exec_role.arn]
     }
   }
 
+  # Statement 3: SQS service permissions (THIS IS THE CRITICAL FIX)
   statement {
-    sid    = "AllowSQSToUseKeyForEncryptedQueues" # Renamed to plural
+    sid    = "AllowSQSToUseKeyForEncryptedQueues"
     effect = "Allow"
-
     principals {
       type        = "Service"
       identifiers = ["sqs.amazonaws.com"]
     }
-
     actions = [
       "kms:Encrypt",
       "kms:Decrypt",
       "kms:GenerateDataKey*"
     ]
-
-    # REFINEMENT: Explicitly scope permissions to this specific key.
     resources = [aws_kms_key.app_key.arn]
-
     condition {
       test     = "StringEquals"
       variable = "aws:SourceAccount"
       values   = [data.aws_caller_identity.current.account_id]
     }
-
     condition {
       test     = "ArnLike"
       variable = "aws:SourceArn"

@@ -50,7 +50,8 @@ for component in "${COMPONENTS[@]}"; do
   # The apply command is simple again. All config is in .tfvars files.
   terraform apply -input=false -auto-approve \
     -var-file="$COMMON_VARS" \
-    -var-file="$COMPONENT_VARS"
+    -var-file="$COMPONENT_VARS" \
+    -var "lambda_artifact_path=${SCRIPT_DIR}/../lambda_package.zip"
 
   cd "$SCRIPT_DIR"
 done

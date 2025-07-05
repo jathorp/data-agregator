@@ -96,8 +96,8 @@ resource "aws_lambda_function" "aggregator" {
   timeout       = var.lambda_timeout
   memory_size   = var.lambda_memory_size
 
-  filename         = "${path.module}/../../../lambda_package.zip"
-  source_code_hash = filebase64sha256("${path.module}/../../../lambda_package.zip")
+  filename         = var.lambda_artifact_path
+  source_code_hash = filebase64sha256(var.lambda_artifact_path)
 
   ephemeral_storage {
     size = var.lambda_ephemeral_storage_size

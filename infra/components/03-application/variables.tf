@@ -20,6 +20,10 @@ variable "aws_region" {
   type        = string
 }
 
+variable "lambda_artifact_path" {
+  description = "The absolute or relative path to the Lambda deployment package (zip file)."
+  type        = string
+}
 
 variable "lambda_function_name" {
   description = "The name of the Lambda function."

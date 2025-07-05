@@ -57,7 +57,6 @@ __pycache__/
 build/
 wheels/
 *.egg-info
-dist/
 
 # Virtual environments
 .venv/

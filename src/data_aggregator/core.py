@@ -10,7 +10,9 @@ from .clients import NiFiClient, S3Client
 
 
 @contextmanager
-def create_gzipped_bundle_stream(s3_client: S3Client, records: List[Dict]) -> Iterator[Tuple[BinaryIO, str]]:
+def create_gzipped_bundle_stream(
+    s3_client: S3Client, records: List[Dict]
+) -> Iterator[Tuple[BinaryIO, str]]:
     spool_file = SpooledTemporaryFile(max_size=64 * 1024 * 1024, mode="w+b")
     hasher = hashlib.sha256()
     try:
@@ -22,7 +24,9 @@ def create_gzipped_bundle_stream(s3_client: S3Client, records: List[Dict]) -> It
                 footer = f"\n--- END {key} ---\n".encode("utf-8")
 
                 # UPDATED: Use the new streaming method
-                with s3_client.get_file_content_stream(bucket=bucket, key=key) as stream:
+                with s3_client.get_file_content_stream(
+                    bucket=bucket, key=key
+                ) as stream:
                     gz.write(header)
                     hasher.update(header)
                     # Read in chunks to keep memory usage low
@@ -51,7 +55,10 @@ def process_and_deliver_batch(
     if not records:
         raise ValueError("Cannot process an empty batch of records.")
 
-    with create_gzipped_bundle_stream(s3_client, records) as (bundle_file, content_hash):
+    with create_gzipped_bundle_stream(s3_client, records) as (
+        bundle_file,
+        content_hash,
+    ):
         s3_client.upload_gzipped_bundle(
             bucket=archive_bucket,
             key=archive_key,

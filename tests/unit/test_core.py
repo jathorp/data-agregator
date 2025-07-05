@@ -1,37 +1,38 @@
 # tests/unit/test_core.py
 
-from unittest.mock import MagicMock, call
+from io import BytesIO
+from unittest.mock import MagicMock, patch
 
 from src.data_aggregator.core import process_and_deliver_batch
 
 
-def test_process_and_deliver_batch_happy_path():
+# CORRECTED: We now patch the create_gzipped_bundle_stream function.
+@patch("src.data_aggregator.core.create_gzipped_bundle_stream")
+def test_process_and_deliver_batch_happy_path(mock_create_bundle):
     """
-    Tests the main orchestration logic with mocked clients.
-    Verifies that all steps are called in the correct order with the correct data.
+    Tests the orchestration logic of process_and_deliver_batch in isolation.
     """
     # 1. ARRANGE
-    # Create mock objects for our client dependencies.
     mock_s3_client = MagicMock()
     mock_nifi_client = MagicMock()
 
-    # Configure the mock S3 client to return specific content for each file.
-    mock_s3_client.get_file_content.side_effect = [
-        b"content for file1.txt",
-        b"content for file2.txt",
-    ]
+    # Configure the mock bundle function to return a fake file and hash.
+    # The 'with' statement in the original code expects a context manager.
+    mock_bundle_file = BytesIO(b"fake gzipped content")
+    mock_content_hash = "fake_hash_123"
+    mock_create_bundle.return_value.__enter__.return_value = (
+        mock_bundle_file,
+        mock_content_hash,
+    )
 
-    # Define the input records for the function.
     test_records = [
         {"s3": {"bucket": {"name": "test-bucket"}, "object": {"key": "file1.txt"}}},
-        {"s3": {"bucket": {"name": "test-bucket"}, "object": {"key": "file2.txt"}}},
     ]
     test_archive_bucket = "test-archive"
     test_archive_key = "bundle-123.gz"
     test_read_timeout = 15
 
     # 2. ACT
-    # Call the function we are testing.
     content_hash = process_and_deliver_batch(
         records=test_records,
         s3_client=mock_s3_client,
@@ -42,18 +43,23 @@ def test_process_and_deliver_batch_happy_path():
     )
 
     # 3. ASSERT
-    # Verify that our mocked methods were called as expected.
-    assert mock_s3_client.get_file_content.call_count == 2
+    # Verify the bundle creation was called correctly.
+    mock_create_bundle.assert_called_once_with(mock_s3_client, test_records)
 
-    # Check that the bundle was uploaded to the archive.
-    mock_s3_client.upload_gzipped_bundle.assert_called_once()
+    # Verify the bundle was uploaded to S3 with the correct details.
+    mock_s3_client.upload_gzipped_bundle.assert_called_once_with(
+        bucket=test_archive_bucket,
+        key=test_archive_key,
+        file_obj=mock_bundle_file,
+        content_hash=mock_content_hash,
+    )
 
-    # Check that the bundle was delivered to NiFi.
-    mock_nifi_client.post_bundle.assert_called_once()
+    # Verify the bundle was sent to NiFi with the correct details.
+    mock_nifi_client.post_bundle.assert_called_once_with(
+        data=mock_bundle_file,
+        content_hash=mock_content_hash,
+        read_timeout=test_read_timeout,
+    )
 
-    # Verify the hash passed to both calls is the same.
-    s3_call_args = mock_s3_client.upload_gzipped_bundle.call_args
-    nifi_call_args = mock_nifi_client.post_bundle.call_args
-
-    assert s3_call_args.kwargs["content_hash"] == nifi_call_args.kwargs["content_hash"]
-    assert s3_call_args.kwargs["content_hash"] == content_hash
+    # Verify the final hash is returned correctly.
+    assert content_hash == mock_content_hash

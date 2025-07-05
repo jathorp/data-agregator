@@ -9,7 +9,7 @@ from typing import Any, Dict, List, TypeAlias, cast
 
 import boto3
 import requests
-from aws_lambda_powertools import Logger, Tracer
+from aws_lambda_powertools import Logger, Tracer, Metrics
 from aws_lambda_powertools.utilities.batch import BatchProcessor, EventType
 from aws_lambda_powertools.utilities.batch.types import (
     PartialItemFailureResponse,
@@ -30,6 +30,7 @@ S3EventRecord: TypeAlias = Dict[str, Any]
 
 logger = Logger(service="data-aggregator")
 tracer = Tracer(service="data-aggregator")
+metrics = Metrics(namespace="DataAggregator", service="data-aggregator")
 processor = BatchProcessor(event_type=EventType.SQS)
 
 
@@ -53,18 +54,29 @@ class Dependencies:
 
     def __init__(self) -> None:
         self.idempotency_table: str = os.environ["IDEMPOTENCY_TABLE_NAME"]
-        self.idempotency_ttl_seconds: int = int(
-            os.environ.get("IDEMPOTENCY_TTL_DAYS", "7")
-        ) * 86_400
+        self.idempotency_ttl_seconds: int = (
+            int(os.environ.get("IDEMPOTENCY_TTL_DAYS", "7")) * 86_400
+        )
         self.archive_bucket: str = os.environ["ARCHIVE_BUCKET_NAME"]
         self.nifi_endpoint_url: str = os.environ["NIFI_ENDPOINT_URL"]
+        self.nifi_connect_timeout: int = int(
+            os.environ.get("NIFI_CONNECT_TIMEOUT_SECONDS", "5")
+        )
         self.nifi_secret_arn: str = os.environ["NIFI_SECRET_ARN"]
         self.circuit_breaker_table: str = os.environ["CIRCUIT_BREAKER_TABLE_NAME"]
+        self.cb_failure_threshold: int = int(
+            os.environ.get("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "3")
+        )
+        self.cb_open_seconds: int = int(
+            os.environ.get("CIRCUIT_BREAKER_OPEN_SECONDS", "300")
+        )
         self.dynamodb_ttl_attribute: str = os.environ.get(
             "DYNAMODB_TTL_ATTRIBUTE", "ttl"
         )
 
-    # --- boto3 / HTTP clients (lazy cached properties) ---
+    @cached_property
+    def metrics(self) -> Metrics:
+        return metrics
 
     @cached_property
     def s3_client(self) -> S3Client:
@@ -83,6 +95,9 @@ class Dependencies:
         return CircuitBreakerClient(
             dynamo_client=boto3.client("dynamodb"),
             table_name=self.circuit_breaker_table,
+            metrics=self.metrics,
+            failure_threshold=self.cb_failure_threshold,
+            open_duration_seconds=self.cb_open_seconds,
         )
 
     @cached_property
@@ -100,6 +115,7 @@ class Dependencies:
             session=self.http_session,
             endpoint_url=self.nifi_endpoint_url,
             auth=(nifi_creds["username"], nifi_creds["password"]),
+            connect_timeout=self.nifi_connect_timeout,
         )
 
 
@@ -143,13 +159,17 @@ def make_record_handler(dependencies: Dependencies):
             raise ValueError("Malformed SQS message body") from exc
 
         expiry_ts = int(time.time()) + dependencies.idempotency_ttl_seconds
-        if dependencies.dynamodb_client.check_and_set_idempotency(object_key, expiry_ts):
+        if dependencies.dynamodb_client.check_and_set_idempotency(
+            object_key, expiry_ts
+        ):
             logger.info(
                 "New object key detected, adding to batch.", extra={"key": object_key}
             )
             return s3_record
 
-        logger.warning("Duplicate object key detected, skipping.", extra={"key": object_key})
+        logger.warning(
+            "Duplicate object key detected, skipping.", extra={"key": object_key}
+        )
         return {}  # empty dict is ignored by BatchProcessor
 
     return record_handler
@@ -174,7 +194,9 @@ def _process_successful_batch(
         cast(S3EventRecord, r.result) for r in successful_records
     ]
     records_for_run = (
-        s3_records_to_process[:1] if breaker_state == "HALF_OPEN" else s3_records_to_process
+        s3_records_to_process[:1]
+        if breaker_state == "HALF_OPEN"
+        else s3_records_to_process
     )
 
     remaining_time_ms = context.get_remaining_time_in_millis()
@@ -192,7 +214,9 @@ def _process_successful_batch(
 
         # Half‑open probe succeeded – return the _other_ messages so SQS re‑queues them
         if breaker_state == "HALF_OPEN" and len(s3_records_to_process) > 1:
-            logger.info("HALF_OPEN probe succeeded. Returning remaining messages to SQS.")
+            logger.info(
+                "HALF_OPEN probe succeeded. Returning remaining messages to SQS."
+            )
             return [
                 cast(PartialItemFailures, {"itemIdentifier": record.message_id})
                 for record in successful_records[1:]
@@ -211,28 +235,30 @@ def _process_successful_batch(
 # ----------------------------
 
 
+# This decorator will automatically capture and publish all metrics
+# added during the handler's execution in the correct EMF format.
 @logger.inject_lambda_context(log_event=True)
 @tracer.capture_lambda_handler
-def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailureResponse:
-    """
-    Main AWS Lambda entry‑point.
-    Creates a fresh Dependencies() instance per invocation,
-    feeds it to a record handler factory, then delegates SQS partial‑batch
-    bookkeeping to aws‑lambda‑powertools BatchProcessor.
-    """
+@metrics.log_metrics(capture_cold_start_metric=True)
+def handler(
+    event: Dict[str, Any], context: LambdaContext
+) -> PartialItemFailureResponse:
     deps = Dependencies()
     with processor(
         records=event["Records"],
         handler=make_record_handler(deps),
     ):
-        # BatchProcessor processes each message inside the context‑manager.
         pass
 
     # start with any per‑record failures already detected by BatchProcessor
-    batch_item_failures: List[PartialItemFailures] = processor.response()["batchItemFailures"]
+    batch_item_failures: List[PartialItemFailures] = processor.response()[
+        "batchItemFailures"
+    ]
 
     successful_records = [
-        rec for rec in processor.success_messages if rec.result  # those passed idempotency
+        rec
+        for rec in processor.success_messages
+        if rec.result  # those passed idempotency
     ]
 
     if successful_records:

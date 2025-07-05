@@ -144,6 +144,9 @@ resource "aws_lambda_function" "aggregator" {
       LOG_LEVEL                  = "INFO"
       DYNAMODB_TTL_ATTRIBUTE     = "ttl"
       IDEMPOTENCY_TTL_DAYS       = var.idempotency_ttl_days
+      NIFI_CONNECT_TIMEOUT_SECONDS      = var.nifi_connect_timeout_seconds
+      CIRCUIT_BREAKER_FAILURE_THRESHOLD = var.circuit_breaker_failure_threshold
+      CIRCUIT_BREAKER_OPEN_SECONDS      = var.circuit_breaker_open_seconds
     }
   }
 

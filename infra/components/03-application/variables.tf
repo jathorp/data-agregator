@@ -63,3 +63,21 @@ variable "nifi_endpoint_cidr" {
   type        = string
   # No default value, as this is environment-specific and must be provided.
 }
+
+variable "nifi_connect_timeout_seconds" {
+  description = "The timeout in seconds for establishing a connection to NiFi."
+  type        = number
+  default     = 5
+}
+
+variable "circuit_breaker_failure_threshold" {
+  description = "The number of consecutive failures needed to open the circuit."
+  type        = number
+  default     = 3
+}
+
+variable "circuit_breaker_open_seconds" {
+  description = "The duration in seconds the circuit remains open before moving to half-open."
+  type        = number
+  default     = 300
+}

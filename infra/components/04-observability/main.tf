@@ -93,35 +93,39 @@ resource "aws_cloudwatch_composite_alarm" "pipeline_outage" {
   tags = local.common_tags
 }
 
-# 5. NEW: Anomaly Detection for "Denial-of-Wallet" Protection (WARNING)
-# resource "aws_cloudwatch_metric_alarm" "sqs_inbound_anomaly" {
-#   alarm_name          = "${var.project_name}-sqs-inbound-anomaly"
-#   comparison_operator = "GreaterThanUpperThreshold"
-#   evaluation_periods  = 2
-#   threshold_metric_id = "m1"
-#   alarm_description   = "WARNING: An anomalous spike in incoming S3 files has been detected. Check for misconfigured clients or unexpected costs."
-#
-#   metric_query {
-#     id = "m1"
-#     metric {
-#       metric_name = "NumberOfMessagesSent"
-#       namespace   = "AWS/SQS"
-#       period      = 600
-#       stat        = "Sum"
-#       dimensions = {
-#         QueueName = data.terraform_remote_state.stateful.outputs.main_queue_name
-#       }
-#     }
-#   }
-#
-#   metric_query {
-#     id         = "e1"
-#     expression = "ANOMALY_DETECTION_BAND(m1, 2)"
-#     label      = "NumberOfMessagesSent (Expected)"
-#   }
-#
-#   alarm_actions = [aws_sns_topic.alerts_warning.arn]
-#   ok_actions    = [aws_sns_topic.alerts_warning.arn]
-#
-#   tags = local.common_tags
-# }
+# 5. Anomaly Detection for “Denial-of-Wallet” protection (WARNING)
+resource "aws_cloudwatch_metric_alarm" "sqs_inbound_anomaly" {
+  alarm_name          = "${var.project_name}-sqs-inbound-anomaly"
+  comparison_operator = "GreaterThanUpperThreshold"
+  evaluation_periods  = 2
+  threshold_metric_id = "e1" # ← Point at the anomaly detection band
+  alarm_description   = "WARNING: An anomalous spike in incoming SQS messages detected."
+
+  # ── Actual metric we care about ──
+  metric_query {
+    id          = "m1"
+    return_data = true # CloudWatch evaluates this value
+    metric {
+      metric_name = "NumberOfMessagesSent"
+      namespace   = "AWS/SQS"
+      period      = 600
+      stat        = "Sum"
+      dimensions = {
+        QueueName = data.terraform_remote_state.stateful.outputs.main_queue_name
+      }
+    }
+  }
+
+  # ── Anomaly-detection band (±2 σ) ──
+  metric_query {
+    id         = "e1"
+    expression = "ANOMALY_DETECTION_BAND(m1, 2)"
+    label      = "Expected range (2σ)"
+    return_data = false # This query provides the threshold, not the data to evaluate
+  }
+
+  alarm_actions = [aws_sns_topic.alerts_warning.arn]
+  ok_actions    = [aws_sns_topic.alerts_warning.arn]
+
+  tags = local.common_tags
+}

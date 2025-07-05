@@ -50,4 +50,38 @@ data "aws_iam_policy_document" "kms_policy" {
       identifiers = [aws_iam_role.lambda_exec_role.arn]
     }
   }
+
+  statement {
+    sid    = "AllowSQSToUseKeyForEncryptedQueues" # Renamed to plural
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["sqs.amazonaws.com"]
+    }
+
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:GenerateDataKey*"
+    ]
+
+    # REFINEMENT: Explicitly scope permissions to this specific key.
+    resources = [aws_kms_key.app_key.arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values = [
+        aws_sqs_queue.main.arn,
+        aws_sqs_queue.dlq.arn
+      ]
+    }
+  }
 }

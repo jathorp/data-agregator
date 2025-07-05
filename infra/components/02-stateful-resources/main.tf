@@ -69,7 +69,7 @@ resource "aws_iam_role" "lambda_exec_role" {
 
   # This "trust policy" allows the Lambda service to assume this role.
   assume_role_policy = jsonencode({
-    Version   = "2012-10-17"
+    Version = "2012-10-17"
     Statement = [{
       Action    = "sts:AssumeRole"
       Effect    = "Allow"
@@ -161,9 +161,9 @@ resource "aws_s3_bucket_policy" "landing" {
 }
 data "aws_iam_policy_document" "enforce_tls_landing" {
   statement {
-    sid       = "EnforceTLSTrafficOnly"
-    effect    = "Deny"
-    actions   = ["s3:*"]
+    sid     = "EnforceTLSTrafficOnly"
+    effect  = "Deny"
+    actions = ["s3:*"]
     resources = [
       aws_s3_bucket.landing.arn,
       "${aws_s3_bucket.landing.arn}/*",
@@ -232,9 +232,9 @@ resource "aws_s3_bucket_policy" "archive" {
 }
 data "aws_iam_policy_document" "enforce_tls_archive" {
   statement {
-    sid       = "EnforceTLSTrafficOnly"
-    effect    = "Deny"
-    actions   = ["s3:*"]
+    sid     = "EnforceTLSTrafficOnly"
+    effect  = "Deny"
+    actions = ["s3:*"]
     resources = [
       aws_s3_bucket.archive.arn,
       "${aws_s3_bucket.archive.arn}/*",
@@ -312,7 +312,7 @@ resource "aws_dynamodb_table" "idempotency" {
     enabled     = true
     kms_key_arn = aws_kms_key.app_key.arn
   }
-  tags      = merge(local.common_tags, { Name = var.idempotency_table_name })
+  tags = merge(local.common_tags, { Name = var.idempotency_table_name })
   lifecycle { prevent_destroy = true }
 }
 resource "aws_dynamodb_table" "circuit_breaker" {
@@ -328,7 +328,7 @@ resource "aws_dynamodb_table" "circuit_breaker" {
     enabled     = true
     kms_key_arn = aws_kms_key.app_key.arn
   }
-  tags      = merge(local.common_tags, { Name = var.circuit_breaker_table_name })
+  tags = merge(local.common_tags, { Name = var.circuit_breaker_table_name })
   lifecycle { prevent_destroy = true }
 }
 

@@ -29,7 +29,7 @@ data "aws_iam_policy_document" "kms_policy" {
     actions   = ["kms:*"]
     resources = ["*"]
     principals {
-      type        = "AWS"
+      type = "AWS"
       identifiers = [
         "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root",
         var.kms_admin_role_arn
@@ -50,7 +50,7 @@ data "aws_iam_policy_document" "kms_policy" {
     ]
     resources = ["*"]
     principals {
-      type        = "AWS"
+      type = "AWS"
       # This reference is now safe because this policy is applied AFTER the role is created.
       identifiers = [aws_iam_role.lambda_exec_role.arn]
     }

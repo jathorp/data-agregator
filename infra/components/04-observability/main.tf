@@ -98,15 +98,15 @@ resource "aws_cloudwatch_metric_alarm" "sqs_inbound_anomaly" {
   alarm_name          = "${var.project_name}-sqs-inbound-anomaly"
   comparison_operator = "GreaterThanUpperThreshold"
   evaluation_periods  = 2
-  alarm_description   = "WARNING: An anomalous spike in incoming S3 files has been detected. Check for misconfigured clients or unexpected costs."
   threshold_metric_id = "m1"
+  alarm_description   = "WARNING: An anomalous spike in incoming S3 files has been detected. Check for misconfigured clients or unexpected costs."
 
   metric_query {
     id = "m1"
     metric {
       metric_name = "NumberOfMessagesSent"
       namespace   = "AWS/SQS"
-      period      = 600 # 10 minutes
+      period      = 600
       stat        = "Sum"
       dimensions = {
         QueueName = data.terraform_remote_state.stateful.outputs.main_queue_name
@@ -116,7 +116,7 @@ resource "aws_cloudwatch_metric_alarm" "sqs_inbound_anomaly" {
 
   metric_query {
     id         = "e1"
-    expression = "ANOMALY_DETECTION_BAND(m1, 2)" # A standard deviation of 2 is a good starting point
+    expression = "ANOMALY_DETECTION_BAND(m1, 2)"
     label      = "NumberOfMessagesSent (Expected)"
   }
 

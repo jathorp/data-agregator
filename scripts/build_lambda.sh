@@ -26,7 +26,7 @@ uv pip install \
 
 # 3. copy your application code
 echo "🔹 Copying application source code..."
-rsync -a --exclude='tests' src/ build/
+rsync -a --exclude='tests' src/data_aggregator/ build/
 
 # 4. zip the contents of the build directory
 echo "🔹 Creating zip archive..."

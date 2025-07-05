@@ -57,6 +57,8 @@ for component in "${COMPONENTS[@]}"; do
     optional_args+=(-var-file "$COMPONENT_VARS_PATH")
   fi
 
+  echo "Using ${PROJECT_ROOT_DIR}/dist/lambda.zip"
+
   # Add the lambda artifact path ONLY for the application component.
   if [ "$component" == "03-application" ]; then
     optional_args+=(-var "lambda_artifact_path=${PROJECT_ROOT_DIR}/dist/lambda.zip")

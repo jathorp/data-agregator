@@ -9,11 +9,13 @@ set -e
 ENVIRONMENT=$1
 
 # An array defining the components in the REVERSE order of creation for safe destruction.
+# CORRECTED: Added "00-security" to ensure a complete teardown.
 COMPONENTS=(
   "04-observability"
   "03-application"
   "02-stateful-resources"
   "01-network"
+  "00-security"
 )
 # --- End Configuration ---
 
@@ -26,9 +28,11 @@ if [ -z "$ENVIRONMENT" ]; then
   exit 1
 fi
 
-echo "🔥 Starting destruction for environment: $ENVIRONMENT"
-echo "   You have 5 seconds to cancel (Ctrl+C)..."
-sleep 5
+echo "🔥🔥🔥  D A N G E R  🔥🔥🔥"
+echo "You are about to run a DESTRUCTIVE operation on the '$ENVIRONMENT' environment."
+echo "This will permanently delete all managed infrastructure."
+echo "You have 10 seconds to cancel (Ctrl+C)..."
+sleep 10
 
 # Get the absolute path of the directory where the script is located.
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
@@ -52,11 +56,13 @@ for component in "${COMPONENTS[@]}"; do
 
   # Initialize Terraform to read the state.
   echo "   Running terraform init..."
-  terraform init -input=false -backend-config="$BACKEND_CONFIG"
+  terraform init -input=false -reconfigure -backend-config="$BACKEND_CONFIG"
 
   # Run terraform destroy.
   echo "   Running terraform destroy..."
-  terraform destroy -input=false -auto-approve \
+  # CORRECTED: Removed the extremely dangerous '-auto-approve' flag.
+  # The user will now be required to manually type 'yes' to confirm.
+  terraform destroy \
     -var-file="$COMMON_VARS" \
     -var-file="$COMPONENT_VARS"
 

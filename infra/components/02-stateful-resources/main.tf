@@ -224,11 +224,12 @@ resource "aws_sqs_queue" "dlq" {
   kms_master_key_id = aws_kms_key.app_key.arn # Using CMK
   tags              = merge(local.common_tags, { Name = var.dlq_name })
 }
+
 resource "aws_sqs_queue" "main" {
   name                       = var.main_queue_name
   message_retention_seconds  = 345600
   visibility_timeout_seconds = 90
-  kms_master_key_id          = aws_kms_key.app_key.arn # Using CMK
+  # kms_master_key_id          = aws_kms_key.app_key.arn # Using CMK
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.dlq.arn
     maxReceiveCount     = 5

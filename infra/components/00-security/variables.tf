@@ -5,6 +5,16 @@ variable "project_name" {
   type        = string
 }
 
+variable "environment_name" {
+  description = "The name of the environment (e.g., 'dev', 'prod')."
+  type        = string
+}
+
+variable "aws_region" {
+  description = "The AWS region to deploy resources into."
+  type        = string
+}
+
 variable "kms_admin_role_name" {
   description = "The name for the KMS administrative role."
   type        = string

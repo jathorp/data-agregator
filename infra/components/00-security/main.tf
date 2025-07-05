@@ -18,8 +18,9 @@ resource "aws_iam_role" "kms_admin" {
   })
 
   tags = {
-    Project   = var.project_name
-    ManagedBy = "Terraform"
+    Project     = var.project_name
+    Environment = var.environment_name
+    ManagedBy   = "Terraform"
   }
 }
 

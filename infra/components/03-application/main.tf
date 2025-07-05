@@ -62,26 +62,15 @@ resource "aws_security_group" "aggregator_lambda_sg" {
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
   tags        = local.common_tags
 
+  # Egress for DEV: Allow HTTPS to anywhere inside the VPC. This is safe and breaks the cycle.
+  # Egress for PROD: Allow HTTPS only to the specific on-premise NiFi CIDR.
   egress {
-    from_port       = 443
-    to_port         = 443
-    protocol        = "tcp"
-    description     = "Allow HTTPS to the NiFi endpoint"
-    security_groups = var.environment_name == "dev" ? [module.mock_nifi_endpoint[0].endpoint_security_group_id] : null
-    cidr_blocks     = var.environment_name != "dev" ? [var.nifi_endpoint_cidr] : null
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    description = "Allow HTTPS to the NiFi endpoint"
+    cidr_blocks = var.environment_name == "dev" ? [data.terraform_remote_state.network.outputs.vpc_cidr_block] : [var.nifi_endpoint_cidr]
   }
-}
-
-resource "aws_security_group_rule" "lambda_to_mock_nifi" {
-  count = var.environment_name == "dev" ? 1 : 0
-
-  type                     = "ingress"
-  from_port                = 443
-  to_port                  = 443
-  protocol                 = "tcp"
-  security_group_id        = module.mock_nifi_endpoint[0].endpoint_security_group_id
-  source_security_group_id = aws_security_group.aggregator_lambda_sg.id
-  description              = "Allow inbound HTTPS from the Aggregator Lambda"
 }
 
 # -----------------------------------------------------------------------------

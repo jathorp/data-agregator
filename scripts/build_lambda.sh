@@ -4,8 +4,8 @@ root_dir="$(dirname "$(dirname "$0")")"
 cd "$root_dir"
 
 runtime_py="3.13"                 # match aws runtime
-# IMPORTANT: Change this if your Lambda is ARM64/Graviton
-plat="x86_64-manylinux2014"       # use aarch64-manylinux2014 for arm64
+# IMPORTANT: Change this if your Lambda is not ARM64/Graviton
+plat="aarch64-manylinux2014"      # use aarch64-manylinux2014 for arm64
 
 # --- Use build/ as a staging area ---
 rm -rf build lambda_package.zip && mkdir -p build/python

@@ -10,6 +10,16 @@ variable "environment_name" {
   type        = string
 }
 
+variable "aws_region" {
+  description = "The AWS region to deploy resources into."
+  type        = string
+}
+
+variable "remote_state_bucket" {
+  description = "The name of the S3 bucket where Terraform state is stored."
+  type        = string
+}
+
 # --- S3 Variables ---
 variable "landing_bucket_name" {
   description = "The base name for the S3 landing bucket. A random suffix will be added."

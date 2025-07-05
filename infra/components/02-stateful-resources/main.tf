@@ -20,53 +20,6 @@ resource "aws_kms_key" "app_key" {
   tags                    = local.common_tags
 }
 
-data "terraform_remote_state" "security" {
-  backend = "s3"
-  config = {
-    bucket = "data-agregator-tfstate-2-dev" # Use your actual tfstate bucket name
-    key    = "dev/components/00-security.tfstate"
-    region = "eu-west-2" # Use your actual region
-  }
-}
-
-data "aws_iam_policy_document" "kms_policy" {
-  # Statement 1: Gives full administrative control to the root user (fail-safe)
-  # and the specified infrastructure admin role.
-  statement {
-    sid       = "EnableIAMUserPermissions"
-    effect    = "Allow"
-    actions   = ["kms:*"]
-    resources = ["*"]
-    principals {
-      type = "AWS"
-      identifiers = [
-        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root",
-        # Use the output from the security component instead of a variable
-        data.terraform_remote_state.security.outputs.kms_admin_role_arn
-      ]
-    }
-  }
-
-  # Statement 2: Gives usage permissions to the application Lambda function's role.
-  statement {
-    sid    = "AllowLambdaUsage"
-    effect = "Allow"
-    actions = [
-      "kms:Encrypt",
-      "kms:Decrypt",
-      "kms:ReEncrypt*",
-      "kms:GenerateDataKey*",
-      "kms:DescribeKey"
-    ]
-    resources = ["*"]
-    principals {
-      type = "AWS"
-      # This reference is now safe because this policy is applied AFTER the role is created.
-      identifiers = [aws_iam_role.lambda_exec_role.arn]
-    }
-  }
-}
-
 # NEW resource to attach the policy to the existing key.
 # This happens AFTER both the key and the IAM role are created, solving the race condition.
 resource "aws_kms_key_policy" "app_key_policy" {

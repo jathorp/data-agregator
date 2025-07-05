@@ -1,4 +1,4 @@
-# environments/dev/stateful.tfvars
+# environments/dev/stateful-resources.tfvars
 
 # Variables specific to the '02-stateful-resources' component.
 
@@ -10,3 +10,4 @@ idempotency_table_name     = "data-aggregator-idempotency-dev"
 circuit_breaker_table_name = "data-agregator-circuit-breaker-dev"
 nifi_secret_name           = "data-aggregator/nifi-credentials-dev"
 lambda_role_name           = "data-aggregator-processor-role-dev"
+remote_state_bucket        = "data-agregator-tfstate-2-dev"

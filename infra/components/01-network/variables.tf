@@ -15,6 +15,11 @@ variable "vpc_cidr_block" {
   type        = string
 }
 
+variable "aws_region" {
+  description = "The AWS region to deploy resources into."
+  type        = string
+}
+
 # REFINED: Changed from list(string) to map(string) for explicit AZ-to-CIDR mapping.
 variable "private_subnet_cidrs" {
   description = "A map of CIDR blocks for the private subnets, keyed by Availability Zone name."

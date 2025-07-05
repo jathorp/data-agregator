@@ -1,7 +1,7 @@
 # components/02-stateful-resources/providers.tf
 
 terraform {
-  required_version = "~> 1.5"
+  required_version = "~> 1.6"
 
   required_providers {
     aws = {
@@ -14,5 +14,5 @@ terraform {
 }
 
 provider "aws" {
-  region = "eu-west-2"
+  region = var.aws_region
 }

@@ -94,34 +94,34 @@ resource "aws_cloudwatch_composite_alarm" "pipeline_outage" {
 }
 
 # 5. NEW: Anomaly Detection for "Denial-of-Wallet" Protection (WARNING)
-resource "aws_cloudwatch_metric_alarm" "sqs_inbound_anomaly" {
-  alarm_name          = "${var.project_name}-sqs-inbound-anomaly"
-  comparison_operator = "GreaterThanUpperThreshold"
-  evaluation_periods  = 2
-  threshold_metric_id = "m1"
-  alarm_description   = "WARNING: An anomalous spike in incoming S3 files has been detected. Check for misconfigured clients or unexpected costs."
-
-  metric_query {
-    id = "m1"
-    metric {
-      metric_name = "NumberOfMessagesSent"
-      namespace   = "AWS/SQS"
-      period      = 600
-      stat        = "Sum"
-      dimensions = {
-        QueueName = data.terraform_remote_state.stateful.outputs.main_queue_name
-      }
-    }
-  }
-
-  metric_query {
-    id         = "e1"
-    expression = "ANOMALY_DETECTION_BAND(m1, 2)"
-    label      = "NumberOfMessagesSent (Expected)"
-  }
-
-  alarm_actions = [aws_sns_topic.alerts_warning.arn]
-  ok_actions    = [aws_sns_topic.alerts_warning.arn]
-
-  tags = local.common_tags
-}
+# resource "aws_cloudwatch_metric_alarm" "sqs_inbound_anomaly" {
+#   alarm_name          = "${var.project_name}-sqs-inbound-anomaly"
+#   comparison_operator = "GreaterThanUpperThreshold"
+#   evaluation_periods  = 2
+#   threshold_metric_id = "m1"
+#   alarm_description   = "WARNING: An anomalous spike in incoming S3 files has been detected. Check for misconfigured clients or unexpected costs."
+#
+#   metric_query {
+#     id = "m1"
+#     metric {
+#       metric_name = "NumberOfMessagesSent"
+#       namespace   = "AWS/SQS"
+#       period      = 600
+#       stat        = "Sum"
+#       dimensions = {
+#         QueueName = data.terraform_remote_state.stateful.outputs.main_queue_name
+#       }
+#     }
+#   }
+#
+#   metric_query {
+#     id         = "e1"
+#     expression = "ANOMALY_DETECTION_BAND(m1, 2)"
+#     label      = "NumberOfMessagesSent (Expected)"
+#   }
+#
+#   alarm_actions = [aws_sns_topic.alerts_warning.arn]
+#   ok_actions    = [aws_sns_topic.alerts_warning.arn]
+#
+#   tags = local.common_tags
+# }

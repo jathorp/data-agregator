@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Get the project root directory
 root_dir="$(dirname "$(dirname "$0")")"
 cd "$root_dir"
 
-runtime_py="3.13"                 # match aws runtime
-# IMPORTANT: Change this if your Lambda is not ARM64/Graviton
-plat="aarch64-manylinux2014"      # use aarch64-manylinux2014 for arm64
+# --- Configuration (matches your previous script) ---
+runtime_py="3.13"
+plat="aarch64-manylinux2014"
 
-# --- Use build/ as a staging area ---
-rm -rf build lambda_package.zip && mkdir -p build/python
+# --- 1. Clean up old artifacts and create a fresh staging area ---
+echo "🔹 Cleaning up old artifacts..."
+rm -rf build/ dist/ lambda.zip lambda_package.zip # Clean everything
+mkdir -p build/python dist/
 
-# 1. freeze the exact pins from uv.lock -> requirements.txt
+# --- 2. Install dependencies into the staging area ---
 echo "🔹 Exporting dependencies from uv.lock..."
 uv export --frozen --no-dev --no-editable -o build/requirements.txt
 
-# 2. vendor third-party wheels into build/python
 echo "🔹 Installing dependencies for Lambda environment..."
 uv pip install \
   --no-installer-metadata \
@@ -24,15 +27,16 @@ uv pip install \
   --target build/python \
   -r build/requirements.txt
 
-# 3. copy your application code
+# --- 3. Copy ONLY the application code into the staging area ---
+# This is the single, correct command to copy your app files to the root.
 echo "🔹 Copying application source code..."
-rsync -a --exclude='tests' src/data_aggregator/ build/
+rsync -a --exclude='tests' --exclude='__pycache__' src/data_aggregator/ build/
 
-# 4. zip the contents of the build directory
+# --- 4. Create the final, clean zip archive ---
 echo "🔹 Creating zip archive..."
-mkdir -p dist # Ensure the dist directory exists
 cd build
-zip -qr ../dist/lambda.zip .
+# Zip everything in the current directory, excluding cache files again as a safeguard
+zip -qr ../dist/lambda.zip . -x "*__pycache__*"
 cd .. # Go back to the project root
 
 echo "✅ Lambda artifact created at $(pwd)/dist/lambda.zip"

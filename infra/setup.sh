@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Exit immediately if a command exits with a non-zero status.
-# This ensures that if '01-network' fails, we don't try to deploy '02-stateful-resources'.
+# This ensures that if formatting fails or '01-network' fails, we don't proceed.
 set -e
 
 # --- Configuration ---
@@ -27,10 +27,19 @@ if [ -z "$ENVIRONMENT" ]; then
 fi
 
 echo "🚀 Starting deployment for environment: $ENVIRONMENT"
+echo "-----------------------------------------------------"
 
 # Get the absolute path of the directory where the script is located.
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 ENV_DIR="$SCRIPT_DIR/environments/$ENVIRONMENT"
+
+# --- NEW: Run a format check on the entire project first ---
+echo "🔹 Checking Terraform code formatting..."
+# The '-recursive' flag checks all subdirectories.
+# The '-check' flag makes the command fail if any files are not formatted.
+terraform fmt -recursive -check
+echo "   ✅ Code formatting is correct."
+# --- End of New Step ---
 
 # Loop through each component in the defined order.
 for component in "${COMPONENTS[@]}"; do
@@ -41,7 +50,6 @@ for component in "${COMPONENTS[@]}"; do
   COMPONENT_DIR="$SCRIPT_DIR/components/$component"
 
   # Define paths for the backend and variable files.
-  # Note: The variable file name matches the component directory name.
   BACKEND_CONFIG="$ENV_DIR/$component.backend.tfvars"
   COMMON_VARS="$ENV_DIR/common.tfvars"
   COMPONENT_VARS="$ENV_DIR/${component#*-}.tfvars" # Removes the "01-", "02-" prefix

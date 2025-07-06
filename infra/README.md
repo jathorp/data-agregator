@@ -1,6 +1,6 @@
 # Real-Time Data Aggregation Pipeline
 
-This repository contains the complete Infrastructure as Code (IaC) for a real-time data ingestion and aggregation pipeline on AWS. The infrastructure is defined using Terraform and is structured into a series of logical, independently deployable components.
+This repository contains the complete Infrastructure as Code (IaC) for a real-time data ingestion and aggregation pipeline on AWS. The infrastructure is defined using Terraform and is structured into a series of logical, independently managed components.
 
 ## Architecture Overview
 
@@ -14,49 +14,66 @@ The architecture is a fully decoupled, event-driven pipeline designed for resili
     *   It archives the final bundle to a long-term **S3 Archive Bucket**.
     *   It securely delivers the bundle to an on-premise NiFi endpoint via HTTPS.
 4.  **CloudWatch** provides comprehensive monitoring, logging, and a sophisticated alerting strategy.
-5.  All stateful resources are encrypted using a **Customer-Managed KMS Key**.
+5.  All stateful resources are encrypted and secured following the principle of least privilege.
 
 ## Terraform Project Structure
 
-The codebase is organized into logical directories with clear responsibilities:
+The codebase is organized into logical directories with clear responsibilities. The old top-down orchestration scripts (`setup.sh`, `destroy.sh`) have been **removed** in favor of a more flexible, component-centric approach.
 
 | Directory               | Purpose                                                                                                                                               |
 |-------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **`components/`**       | Contains the core Terraform code, broken down into four distinct infrastructure components that are deployed sequentially.                            |
+| **`components/`**       | Contains the core Terraform code, broken down into distinct infrastructure components. Each component is managed as a standalone unit.                |
+| **`components/tf.sh`**  | **(New)** Standardized wrapper script inside each component. **This is the primary tool for all deployment, planning, and state operations.**         |
 | **`environments/`**     | Contains the configuration (`.tfvars`) for each deployment environment (e.g., `dev`, `prod`). This is where you define environment-specific settings. |
-| **`modules/`**          | Contains reusable, generic Terraform modules. Currently, it holds the `mock_nifi_endpoint` for testing in the `dev` environment.                      |
-| **`create_backend.sh`** | A one-time script to bootstrap the S3 bucket needed for Terraform's state backend.                                                                    |
-| **`setup.sh`**          | The primary orchestration script used to deploy the entire infrastructure for a given environment in the correct order.                               |
-| **`destroy.sh`**        | An orchestration script to destroy all infrastructure in an environment, useful for cleaning up non-production environments.                          |
+| **`modules/`**          | Contains reusable, generic Terraform modules. For example, the `mock_nifi_endpoint` for testing in the `dev` environment.                             |
+| **`scripts/`**          | **(New)** Contains helper and maintenance scripts. The `tf.sh.template` (the master copy of the wrapper) and the `sync-wrappers.sh` script live here. |
+| **`one_time_setup.sh`** | A script to bootstrap the S3 backend and other prerequisites. This only needs to be run once per AWS account.                                         |
 
 ## Prerequisites
 
 *   **Terraform CLI** (`~> 1.6`)
 *   **AWS CLI** (`v2+`) configured with credentials for the target AWS account.
 
-## Deployment & Operations Workflow
+---
+
+## How to Work with This Repository
 
 ### Stage 1: One-Time Backend Bootstrap (Run Once Per AWS Account)
 
-Terraform requires an S3 bucket to store its state. This script uses the AWS CLI to create and secure this bucket before Terraform runs for the first time.
+Terraform requires an S3 bucket to store its state. This script uses the AWS CLI to create and secure this bucket before Terraform is run for the first time.
 
 1.  Navigate to the infrastructure directory: `cd infra`
-2.  Make the script executable: `chmod +x create_backend.sh`
-3.  Run the bootstrap script: `./create_backend.sh`
+2.  Run the bootstrap script: `./one_time_setup.sh`
 
-### Stage 2: Deploying the Application Infrastructure
+### Stage 2: The Core Workflow - Managing Components
 
-Use the `setup.sh` script to deploy or update the application components. This is the command you will use for all subsequent deployments.
+All day-to-day operations are now performed from within the specific component directory you are working on, using the `tf.sh` wrapper.
 
-1.  Navigate to the infrastructure directory: `cd infra`
-2.  Make the script executable: `chmod +x setup.sh`
-3.  Run the full deployment: `./setup.sh dev`
+**The standard process:**
+1.  Navigate to the component directory you wish to change.
+2.  Run the `tf.sh` wrapper with the target environment and the Terraform command.
+
+```sh
+# Example: To plan a change for the network in the 'dev' environment
+cd components/01-network/
+./tf.sh dev plan
+
+# Example: To apply the change
+./tf.sh dev apply
+```
+
+#### Component Deployment Order
+
+For a brand-new environment, you must deploy the components in sequence. To destroy an environment, you **MUST** destroy them in the **reverse order**.
+
+*   **Deployment Order:** `00-security` -> `01-network` -> `02-stateful-resources` -> `03-application` -> `04-observability`
+*   **Destruction Order:** `04-observability` -> `03-application` -> `02-stateful-resources` -> `01-network` -> `00-security`
 
 ### Stage 3: Critical Post-Deployment Step (After First Deploy)
 
-After the `setup.sh` script completes successfully for the first time, you **must** manually populate the value for the NiFi credentials secret. The application will not function until this step is completed.
+After the `03-application` component is deployed successfully for the first time, you **must** manually populate the NiFi credentials in AWS Secrets Manager. The application will not function until this is done.
 
-Run the following AWS CLI command:
+Run the following AWS CLI command (replacing values as needed for the environment):
 ```bash
 aws secretsmanager put-secret-value \
   --secret-id "data-aggregator/nifi-credentials-dev" \
@@ -64,18 +81,30 @@ aws secretsmanager put-secret-value \
   --region eu-west-2
 ```
 
-### Stage 4: Destroying the Infrastructure (Non-Production Only)
-
-To completely remove all infrastructure from a non-production environment, use the `destroy.sh` script.
-
-> [!WARNING]
-> This action is irreversible and will permanently delete all created resources, including S3 buckets and their contents (if `prevent_destroy` is disabled). Only use this in non-production environments.
-
-1.  Make the script executable: `chmod +x destroy.sh`
-2.  Run the destruction script for the `dev` environment: `./destroy.sh dev`
-
 ---
 
-This concludes the entire infrastructure definition and orchestration part of our project. You now have a complete, approved, and fully documented IaC codebase.
+## Specialized Workflows
 
-It's time to build the final piece: **the Python Lambda function.**
+### Updating the Lambda Function Code
+
+> [!IMPORTANT]
+> The deployment of the Lambda function's application code is now **decoupled** from the infrastructure. You no longer need to run a slow `terraform apply` just to update Python code. This allows for much faster development cycles.
+
+**(Coming Soon)** A dedicated `deploy-lambda.sh` script will be provided for this purpose. It will package the code, upload it to S3, and update the Lambda function directly, all in a few seconds.
+
+### Updating the `tf.sh` Wrapper Script
+
+The `tf.sh` script is the same across all components. To ensure consistency, it is managed from a central template. **DO NOT edit the `tf.sh` files in the component directories directly.**
+
+To make a change to the wrapper:
+
+1.  **Edit the Template:** Open and modify the master template file:
+    *   `infra/scripts/tf.sh.template`
+
+2.  **Run the Sync Script:** From the `infra/` directory, run the synchronization script. This copies the updated template to all component directories.
+    ```sh
+    ./scripts/sync-wrappers.sh
+    ```
+
+3.  **Commit the Changes:** Add the template file and all the updated `tf.sh` files to your Git commit.
+````

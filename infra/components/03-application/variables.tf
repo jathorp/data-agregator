@@ -1,5 +1,3 @@
-# components/03-application/variables.tf
-
 variable "project_name" {
   description = "The name of the project."
   type        = string
@@ -10,18 +8,20 @@ variable "environment_name" {
   type        = string
 }
 
-variable "remote_state_bucket" {
-  description = "The name of the S3 bucket where Terraform state is stored."
-  type        = string
-}
-
 variable "aws_region" {
   description = "The AWS region to deploy resources into."
   type        = string
 }
 
-variable "lambda_artifact_path" {
-  description = "The absolute or relative path to the Lambda deployment package (zip file)."
+# --- NEW: Variable for the shared artifacts bucket ---
+variable "lambda_artifacts_bucket_name" {
+  description = "The name of the central S3 bucket for storing Lambda deployment packages."
+  type        = string
+}
+
+# --- NEW: Variable for the Lambda S3 key ---
+variable "lambda_s3_key" {
+  description = "The object key for the Lambda deployment package in the artifacts S3 bucket."
   type        = string
 }
 
@@ -57,7 +57,7 @@ variable "lambda_memory_size" {
 variable "lambda_ephemeral_storage_size" {
   description = "The size of the Lambda function's /tmp directory in MB. Min 512, Max 10240."
   type        = number
-  default     = 2048 # A sensible default for the streaming architecture.
+  default     = 2048
 }
 
 variable "idempotency_ttl_days" {
@@ -69,14 +69,11 @@ variable "idempotency_ttl_days" {
 variable "nifi_endpoint_url" {
   description = "The full HTTPS URL for the on-premise NiFi ingest endpoint."
   type        = string
-  # No default value, as this is environment-specific and must be provided.
 }
 
-# --- NEW: Variable for the NiFi Endpoint CIDR Block ---
 variable "nifi_endpoint_cidr" {
   description = "The source IP/CIDR block of the on-premise NiFi endpoint for the Lambda's Security Group."
   type        = string
-  # No default value, as this is environment-specific and must be provided.
 }
 
 variable "nifi_connect_timeout_seconds" {

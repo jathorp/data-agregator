@@ -84,7 +84,7 @@ resource "aws_lambda_function" "aggregator" {
   architectures = ["arm64"]
   timeout       = var.lambda_timeout
   memory_size   = var.lambda_memory_size
-  s3_bucket     = data.terraform_remote_state.stateful.outputs.archive_bucket_id
+  s3_bucket     = var.lambda_artifacts_bucket_name
   s3_key        = var.lambda_s3_key
 
   ephemeral_storage {

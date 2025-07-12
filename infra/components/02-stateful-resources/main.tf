@@ -197,7 +197,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "distribution" {
   rule {
     id     = "expire-unprocessed-files"
     status = "Enabled"
-    # Safety net: Expire objects not deleted by the consumer after 14 days
+    filter {}
     expiration { days = 14 }
     abort_incomplete_multipart_upload { days_after_initiation = 1 }
   }

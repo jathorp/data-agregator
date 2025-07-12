@@ -25,7 +25,6 @@ COMPONENTS_TO_RUN=(
 show_help() {
   cat << EOF
 Orchestrates Terraform commands across all components for an entire environment.
-
 Usage: ./scripts/env.sh <environment> <command> [terraform_options]
 EOF
 }
@@ -80,24 +79,25 @@ for component_path in "${COMPONENTS_TO_RUN[@]}"; do
   if [ -d "$component_path" ] && [ -f "$component_path/tf.sh" ]; then
     # --- THIS IS THE FINAL CORRECTED LOGIC ---
     # 1. Start with the common variables that all components need.
-    TF_VAR_FILE_ARGS=("-var-file=../../environments/$ENVIRONMENT/common.tfvars")
+    TF_VAR_FILE_ARGS=("-var-file=environments/$ENVIRONMENT/common.tfvars")
 
     # 2. Add component-specific var files using a case statement.
     case "$component_path" in
       "components/01-network")
-        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/network.tfvars")
+        TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/network.tfvars")
         ;;
       "components/02-stateful-resources")
-        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/stateful-resources.tfvars")
-        # This component needs remote state info, which is in the observability file.
-        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/observability.tfvars")
+        TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/stateful-resources.tfvars")
+        # Add the observability vars file because it contains the remote_state_bucket name
+        TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/observability.tfvars")
         ;;
       "components/03-application")
-        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/application.tfvars")
-        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/observability.tfvars")
+        TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/application.tfvars")
+        # Also needs remote state info
+        TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/observability.tfvars")
         ;;
       "components/04-observability")
-        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/observability.tfvars")
+        TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/observability.tfvars")
         ;;
     esac
 

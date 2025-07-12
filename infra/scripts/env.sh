@@ -1,5 +1,4 @@
 #!/bin/bash
-# Exit immediately on error or unset variables
 set -eu
 
 # --- Environment Orchestrator Script ---
@@ -30,7 +29,7 @@ Usage: ./scripts/env.sh <environment> <command> [--component <name>] [--list-com
 
 Arguments:
   <environment>           Environment to target (e.g., dev, prod)
-  <command>                Terraform command (e.g., plan, apply, destroy)
+  <command>                Terraform command (e.g., plan, apply, destroy, import)
 
 Options:
   --component <name>       Run only the specified component (e.g., 01-network)
@@ -41,6 +40,7 @@ Examples:
   ./scripts/env.sh dev plan
   ./scripts/env.sh dev apply --component 03-application
   ./scripts/env.sh dev destroy
+  ./scripts/env.sh dev import --component 01-network <resource> <id>
 EOF
 }
 
@@ -83,6 +83,14 @@ if [[ -z "$ENVIRONMENT" || -z "$COMMAND" ]]; then
   echo -e "${C_RED}❌ Error: Missing environment or command.${C_NC}"
   show_help
   exit 1
+fi
+
+if [[ "$COMMAND" == "import" ]]; then
+  if [[ ${#TF_ARGS[@]} -lt 2 ]]; then
+    echo -e "${C_RED}❌ Error: import requires <resource> <id> arguments.${C_NC}"
+    echo "Example: ./scripts/env.sh dev import --component 01-network aws_s3_bucket.my_bucket my-bucket-name"
+    exit 1
+  fi
 fi
 
 # --- Filter Components if --component is set ---

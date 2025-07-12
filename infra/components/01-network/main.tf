@@ -16,18 +16,8 @@ resource "aws_vpc" "main" {
   tags                 = merge(local.common_tags, { Name = "${var.project_name}-vpc" })
 }
 
-# --- Subnets (Multi-AZ) ---
-# REFINED: Iterating directly on the map makes the logic simpler and more robust.
-resource "aws_subnet" "public" {
-  for_each = var.public_subnet_cidrs
-
-  vpc_id                  = aws_vpc.main.id
-  availability_zone       = each.key   # The AZ name is the map key
-  cidr_block              = each.value # The CIDR is the map value
-  map_public_ip_on_launch = true
-  tags                    = merge(local.common_tags, { Name = "${var.project_name}-public-subnet-${each.key}" })
-}
-
+# --- Private Subnets (Multi-AZ) ---
+# The Lambda functions will reside here, with no direct internet access.
 resource "aws_subnet" "private" {
   for_each = var.private_subnet_cidrs
 
@@ -37,51 +27,13 @@ resource "aws_subnet" "private" {
   tags              = merge(local.common_tags, { Name = "${var.project_name}-private-subnet-${each.key}" })
 }
 
-# --- Internet Connectivity ---
-resource "aws_internet_gateway" "main" {
-  vpc_id = aws_vpc.main.id
-  tags   = merge(local.common_tags, { Name = "${var.project_name}-igw" })
-}
-
-resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.main.id
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.main.id
-  }
-  tags = merge(local.common_tags, { Name = "${var.project_name}-public-rt" })
-}
-
-resource "aws_route_table_association" "public" {
-  for_each       = aws_subnet.public
-  subnet_id      = each.value.id
-  route_table_id = aws_route_table.public.id
-}
-
-# --- Highly Available NAT Gateways ---
-resource "aws_eip" "nat" {
-  for_each = aws_subnet.public
-  domain   = "vpc"
-  tags     = merge(local.common_tags, { Name = "${var.project_name}-nat-eip-${each.key}" })
-}
-
-resource "aws_nat_gateway" "main" {
-  for_each      = aws_subnet.public
-  allocation_id = aws_eip.nat[each.key].id
-  subnet_id     = each.value.id
-  tags          = merge(local.common_tags, { Name = "${var.project_name}-nat-gw-${each.key}" })
-  depends_on    = [aws_internet_gateway.main]
-}
-
+# --- Private Route Tables ---
+# Note: There is no default route to an IGW or NAT Gateway.
+# Outbound traffic is only possible to AWS services via VPC Endpoints.
 resource "aws_route_table" "private" {
   for_each = aws_subnet.private
   vpc_id   = aws_vpc.main.id
-  route {
-    cidr_block = "0.0.0.0/0"
-    # Route to the NAT Gateway in the same AZ
-    nat_gateway_id = aws_nat_gateway.main[each.key].id
-  }
-  tags = merge(local.common_tags, { Name = "${var.project_name}-private-rt-${each.key}" })
+  tags     = merge(local.common_tags, { Name = "${var.project_name}-private-rt-${each.key}" })
 }
 
 resource "aws_route_table_association" "private" {
@@ -91,15 +43,15 @@ resource "aws_route_table_association" "private" {
 }
 
 
-# --- VPC Endpoints for Security and Cost Optimization ---
-# (The code for VPC Endpoints remains the same and is still correct)
+# --- VPC Gateway Endpoints for S3 & DynamoDB ---
+# These endpoints provide private, secure, and cost-effective access.
 data "aws_region" "current" {}
 
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [for rt in aws_route_table.private : rt.id]
+  route_table_ids   = [for rt in aws_route_table.private : rt.id] # Associates with all private route tables
   tags              = local.common_tags
 }
 
@@ -111,19 +63,22 @@ resource "aws_vpc_endpoint" "dynamodb" {
   tags              = local.common_tags
 }
 
+# --- VPC Interface Endpoints Security Group ---
+# A dedicated security group for all interface endpoints.
 resource "aws_security_group" "vpc_endpoints_sg" {
   name        = "${var.project_name}-vpc-endpoints-sg"
-  description = "Allow inbound traffic to VPC interface endpoints from within the VPC"
+  description = "Allow inbound HTTPS traffic to VPC interface endpoints from within the VPC"
   vpc_id      = aws_vpc.main.id
   tags        = local.common_tags
   ingress {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr_block]
+    cidr_blocks = [var.vpc_cidr_block] # Only allow traffic from within the VPC
   }
 }
 
+# --- VPC Interface Endpoints for SQS & KMS ---
 resource "aws_vpc_endpoint" "sqs" {
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${data.aws_region.current.name}.sqs"
@@ -137,16 +92,6 @@ resource "aws_vpc_endpoint" "sqs" {
 resource "aws_vpc_endpoint" "kms" {
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${data.aws_region.current.name}.kms"
-  vpc_endpoint_type   = "Interface"
-  private_dns_enabled = true
-  subnet_ids          = [for s in aws_subnet.private : s.id]
-  security_group_ids  = [aws_security_group.vpc_endpoints_sg.id]
-  tags                = local.common_tags
-}
-
-resource "aws_vpc_endpoint" "secretsmanager" {
-  vpc_id              = aws_vpc.main.id
-  service_name        = "com.amazonaws.${data.aws_region.current.name}.secretsmanager"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
   subnet_ids          = [for s in aws_subnet.private : s.id]

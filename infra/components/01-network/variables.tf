@@ -20,14 +20,7 @@ variable "aws_region" {
   type        = string
 }
 
-# REFINED: Changed from list(string) to map(string) for explicit AZ-to-CIDR mapping.
 variable "private_subnet_cidrs" {
   description = "A map of CIDR blocks for the private subnets, keyed by Availability Zone name."
-  type        = map(string)
-}
-
-# REFINED: Changed from list(string) to map(string).
-variable "public_subnet_cidrs" {
-  description = "A map of CIDR blocks for the public subnets, keyed by Availability Zone name."
   type        = map(string)
 }

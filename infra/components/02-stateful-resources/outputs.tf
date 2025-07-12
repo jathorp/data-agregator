@@ -18,6 +18,15 @@ output "archive_bucket_arn" {
   value       = aws_s3_bucket.archive.arn
 }
 
+output "distribution_bucket_id" {
+  description = "The ID of the S3 distribution bucket."
+  value       = aws_s3_bucket.distribution.id
+}
+output "distribution_bucket_arn" {
+  description = "The ARN of the S3 distribution bucket."
+  value       = aws_s3_bucket.distribution.arn
+}
+
 # SQS Outputs
 output "main_queue_arn" {
   description = "The ARN of the main SQS queue."
@@ -45,27 +54,12 @@ output "idempotency_table_arn" {
   description = "The ARN of the idempotency DynamoDB table."
   value       = aws_dynamodb_table.idempotency.arn
 }
-output "circuit_breaker_table_name" {
-  description = "The name of the circuit breaker DynamoDB table."
-  value       = aws_dynamodb_table.circuit_breaker.name
-}
-output "circuit_breaker_table_arn" {
-  description = "The ARN of the circuit breaker DynamoDB table."
-  value       = aws_dynamodb_table.circuit_breaker.arn
-}
 
-# Secrets Manager Output
-output "nifi_secret_arn" {
-  description = "The ARN of the secret holding the NiFi credentials."
-  value       = aws_secretsmanager_secret.nifi_credentials.arn
-}
-
-# Outputs for the Lambda IAM role, to be consumed by 03-application.
+# IAM Role Outputs
 output "lambda_iam_role_arn" {
   description = "The ARN of the Lambda function's execution role."
   value       = aws_iam_role.lambda_exec_role.arn
 }
-
 output "lambda_iam_role_name" {
   description = "The name of the Lambda function's execution role."
   value       = aws_iam_role.lambda_exec_role.name

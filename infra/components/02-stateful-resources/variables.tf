@@ -31,6 +31,11 @@ variable "archive_bucket_name" {
   type        = string
 }
 
+variable "distribution_bucket_name" {
+  description = "The base name for the S3 distribution bucket (for the on-prem service to pull from)."
+  type        = string
+}
+
 # --- SQS Variables ---
 variable "main_queue_name" {
   description = "The name of the main SQS processing queue."
@@ -45,17 +50,6 @@ variable "dlq_name" {
 # --- DynamoDB Variables ---
 variable "idempotency_table_name" {
   description = "The name of the DynamoDB table for idempotency."
-  type        = string
-}
-
-variable "circuit_breaker_table_name" {
-  description = "The name of the DynamoDB table for the circuit breaker."
-  type        = string
-}
-
-# Variable for the secret that will hold NiFi credentials.
-variable "nifi_secret_name" {
-  description = "The name of the secret in Secrets Manager to store NiFi credentials."
   type        = string
 }
 

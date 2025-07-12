@@ -10,22 +10,9 @@ locals {
 }
 
 # -----------------------------------------------------------------------------
-# DEV-ONLY: Conditionally create the Mock NiFi Endpoint.
-# -----------------------------------------------------------------------------
-module "mock_nifi_endpoint" {
-  source = "../../modules/mock_nifi_endpoint"
-
-  count = var.environment_name == "dev" ? 1 : 0
-
-  project_name       = var.project_name
-  environment_name   = var.environment_name
-  vpc_id             = data.terraform_remote_state.network.outputs.vpc_id
-  private_subnet_ids = values(data.terraform_remote_state.network.outputs.private_subnet_ids)
-}
-
-# -----------------------------------------------------------------------------
 # Section 1: IAM Policy & Attachment for the Lambda Function
 # -----------------------------------------------------------------------------
+
 resource "aws_iam_policy" "aggregator_lambda_policy" {
   name_prefix = "${var.lambda_function_name}-permissions-"
   description = "Permissions for the data aggregator Lambda function"
@@ -38,12 +25,34 @@ resource "aws_iam_policy" "aggregator_lambda_policy" {
         Effect   = "Allow"
         Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${var.lambda_function_name}:*"
       },
-      { Action = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"], Effect = "Allow", Resource = data.terraform_remote_state.stateful.outputs.main_queue_arn },
-      { Action = "s3:GetObject", Effect = "Allow", Resource = "${data.terraform_remote_state.stateful.outputs.landing_bucket_arn}/*" },
-      { Action = ["s3:PutObject"], Effect = "Allow", Resource = "${data.terraform_remote_state.stateful.outputs.archive_bucket_arn}/*" },
-      { Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"], Effect = "Allow", Resource = [data.terraform_remote_state.stateful.outputs.idempotency_table_arn, data.terraform_remote_state.stateful.outputs.circuit_breaker_table_arn] },
-      { Action = "secretsmanager:GetSecretValue", Effect = "Allow", Resource = data.terraform_remote_state.stateful.outputs.nifi_secret_arn },
-      { Action = ["ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DeleteNetworkInterface"], Effect = "Allow", Resource = "*" }
+      {
+        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+        Effect   = "Allow"
+        Resource = data.terraform_remote_state.stateful.outputs.main_queue_arn
+      },
+      {
+        Action   = "s3:GetObject"
+        Effect   = "Allow"
+        Resource = "${data.terraform_remote_state.stateful.outputs.landing_bucket_arn}/*"
+      },
+      {
+        Action = ["s3:PutObject"]
+        Effect = "Allow"
+        Resource = [
+          "${data.terraform_remote_state.stateful.outputs.archive_bucket_arn}/*",
+          "${data.terraform_remote_state.stateful.outputs.distribution_bucket_arn}/*" # Added permission
+        ]
+      },
+      {
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem"]
+        Effect   = "Allow"
+        Resource = data.terraform_remote_state.stateful.outputs.idempotency_table_arn # Simplified
+      },
+      {
+        Action   = ["ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DeleteNetworkInterface"]
+        Effect   = "Allow"
+        Resource = "*"
+      }
     ]
   })
 }
@@ -53,29 +62,22 @@ resource "aws_iam_role_policy_attachment" "aggregator_lambda_attach" {
   policy_arn = aws_iam_policy.aggregator_lambda_policy.arn
 }
 
+
 # -----------------------------------------------------------------------------
-# Section 2: Lambda Security Group & Rules
+# Section 2: Lambda Security Group
 # -----------------------------------------------------------------------------
+
 resource "aws_security_group" "aggregator_lambda_sg" {
   name        = "${var.lambda_function_name}-sg"
-  description = "Controls network access for the aggregator Lambda"
+  description = "Security group for the aggregator Lambda. No egress is required."
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
   tags        = local.common_tags
-
-  # Egress for DEV: Allow HTTPS to anywhere inside the VPC. This is safe and breaks the cycle.
-  # Egress for PROD: Allow HTTPS only to the specific on-premise NiFi CIDR.
-  egress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    description = "Allow HTTPS to the NiFi endpoint"
-    cidr_blocks = var.environment_name == "dev" ? [data.terraform_remote_state.network.outputs.vpc_cidr_block] : [var.nifi_endpoint_cidr]
-  }
 }
 
 # -----------------------------------------------------------------------------
 # Section 3: The Lambda Function Resource
 # -----------------------------------------------------------------------------
+
 resource "aws_lambda_function" "aggregator" {
   function_name = var.lambda_function_name
   role          = data.terraform_remote_state.stateful.outputs.lambda_iam_role_arn
@@ -98,17 +100,11 @@ resource "aws_lambda_function" "aggregator" {
 
   environment {
     variables = {
-      ARCHIVE_BUCKET_NAME               = data.terraform_remote_state.stateful.outputs.archive_bucket_id
-      IDEMPOTENCY_TABLE_NAME            = data.terraform_remote_state.stateful.outputs.idempotency_table_name
-      CIRCUIT_BREAKER_TABLE_NAME        = data.terraform_remote_state.stateful.outputs.circuit_breaker_table_name
-      NIFI_SECRET_ARN                   = data.terraform_remote_state.stateful.outputs.nifi_secret_arn
-      NIFI_ENDPOINT_URL                 = var.environment_name == "dev" ? "https://${module.mock_nifi_endpoint[0].endpoint_dns_name}" : var.nifi_endpoint_url
-      LOG_LEVEL                         = "INFO"
-      DYNAMODB_TTL_ATTRIBUTE            = "ttl"
-      IDEMPOTENCY_TTL_DAYS              = var.idempotency_ttl_days
-      NIFI_CONNECT_TIMEOUT_SECONDS      = var.nifi_connect_timeout_seconds
-      CIRCUIT_BREAKER_FAILURE_THRESHOLD = var.circuit_breaker_failure_threshold
-      CIRCUIT_BREAKER_OPEN_SECONDS      = var.circuit_breaker_open_seconds
+      ARCHIVE_BUCKET_NAME      = data.terraform_remote_state.stateful.outputs.archive_bucket_id
+      DISTRIBUTION_BUCKET_NAME = data.terraform_remote_state.stateful.outputs.distribution_bucket_id # Added
+      IDEMPOTENCY_TABLE_NAME   = data.terraform_remote_state.stateful.outputs.idempotency_table_name
+      LOG_LEVEL                = "INFO"
+      IDEMPOTENCY_TTL_DAYS     = var.idempotency_ttl_days
     }
   }
 

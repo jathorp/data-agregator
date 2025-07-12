@@ -30,7 +30,7 @@ resource "aws_iam_role" "lambda_exec_role" {
 }
 
 # ────────────────────────────────────────────────────────────────────────────────
-# S3 – access-logs, landing, archive (all using S3-managed AES-256)
+# S3 Buckets
 # ────────────────────────────────────────────────────────────────────────────────
 resource "aws_s3_bucket" "access_logs" {
   bucket        = "${var.project_name}-access-logs-${random_id.suffix.hex}"
@@ -164,6 +164,50 @@ resource "aws_s3_bucket_policy" "archive" {
   policy = data.aws_iam_policy_document.enforce_tls_archive.json
 }
 
+# --- Distribution Bucket ---
+# This new bucket is the "mailbox" for the on-premise service to pull from.
+resource "aws_s3_bucket" "distribution" {
+  bucket = "${var.distribution_bucket_name}-${random_id.suffix.hex}"
+  tags   = merge(local.common_tags, { Name = var.distribution_bucket_name })
+}
+
+resource "aws_s3_bucket_logging" "distribution" {
+  bucket        = aws_s3_bucket.distribution.id
+  target_bucket = aws_s3_bucket.access_logs.id
+  target_prefix = "logs/distribution/"
+}
+
+resource "aws_s3_bucket_public_access_block" "distribution" {
+  bucket                  = aws_s3_bucket.distribution.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "distribution" {
+  bucket = aws_s3_bucket.distribution.id
+  rule {
+    apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "distribution" {
+  bucket = aws_s3_bucket.distribution.id
+  rule {
+    id     = "expire-unprocessed-files"
+    status = "Enabled"
+    # Safety net: Expire objects not deleted by the consumer after 14 days
+    expiration { days = 14 }
+    abort_incomplete_multipart_upload { days_after_initiation = 1 }
+  }
+}
+
+resource "aws_s3_bucket_policy" "distribution" {
+  bucket = aws_s3_bucket.distribution.id
+  policy = data.aws_iam_policy_document.enforce_tls_distribution.json
+}
+
 # ────────────────────────────────────────────────────────────────────────────────
 # SQS – uses AWS-managed encryption (`alias/aws/sqs`)
 # ────────────────────────────────────────────────────────────────────────────────
@@ -235,33 +279,4 @@ resource "aws_dynamodb_table" "idempotency" {
 
   tags = merge(local.common_tags, { Name = var.idempotency_table_name })
   lifecycle { prevent_destroy = true }
-}
-
-resource "aws_dynamodb_table" "circuit_breaker" {
-  name         = var.circuit_breaker_table_name
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "service_name"
-
-  attribute {
-    name = "service_name"
-    type = "S"
-  }
-
-  point_in_time_recovery {
-    enabled = true
-  }
-  server_side_encryption {
-    enabled = true
-  }
-
-  tags = merge(local.common_tags, { Name = var.circuit_breaker_table_name })
-  lifecycle { prevent_destroy = true }
-}
-
-# ────────────────────────────────────────────────────────────────────────────────
-# Secrets Manager – default AWS-managed key
-# ────────────────────────────────────────────────────────────────────────────────
-resource "aws_secretsmanager_secret" "nifi_credentials" {
-  name = var.nifi_secret_name
-  tags = merge(local.common_tags, { Name = var.nifi_secret_name })
 }

@@ -13,13 +13,11 @@ variable "aws_region" {
   type        = string
 }
 
-# --- NEW: Variable for the shared artifacts bucket ---
 variable "lambda_artifacts_bucket_name" {
   description = "The name of the central S3 bucket for storing Lambda deployment packages."
   type        = string
 }
 
-# --- NEW: Variable for the Lambda S3 key ---
 variable "lambda_s3_key" {
   description = "The object key for the Lambda deployment package in the artifacts S3 bucket."
   type        = string
@@ -39,7 +37,7 @@ variable "lambda_handler" {
 variable "lambda_runtime" {
   description = "The runtime for the Lambda function."
   type        = string
-  default     = "python3.13"
+  default     = "python3.12"
 }
 
 variable "lambda_timeout" {
@@ -64,32 +62,4 @@ variable "idempotency_ttl_days" {
   description = "The number of days to retain the idempotency key in DynamoDB."
   type        = number
   default     = 7
-}
-
-variable "nifi_endpoint_url" {
-  description = "The full HTTPS URL for the on-premise NiFi ingest endpoint."
-  type        = string
-}
-
-variable "nifi_endpoint_cidr" {
-  description = "The source IP/CIDR block of the on-premise NiFi endpoint for the Lambda's Security Group."
-  type        = string
-}
-
-variable "nifi_connect_timeout_seconds" {
-  description = "The timeout in seconds for establishing a connection to NiFi."
-  type        = number
-  default     = 5
-}
-
-variable "circuit_breaker_failure_threshold" {
-  description = "The number of consecutive failures needed to open the circuit."
-  type        = number
-  default     = 3
-}
-
-variable "circuit_breaker_open_seconds" {
-  description = "The duration in seconds the circuit remains open before moving to half-open."
-  type        = number
-  default     = 300
 }

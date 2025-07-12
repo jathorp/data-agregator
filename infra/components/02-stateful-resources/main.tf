@@ -95,21 +95,33 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "landing" {
   }
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "landing" {
-  bucket = aws_s3_bucket.landing.id
-  rule {
-    id     = "expire-and-cleanup"
-    status = "Enabled"
-    filter {}
-    expiration { days = 7 }
-    abort_incomplete_multipart_upload { days_after_initiation = 1 }
+resource "aws_s3_bucket" "landing" {
+  bucket = "my-landing-bucket"
+
+  tags = {
+    Name = "my-landing-bucket"
   }
 }
 
-resource "aws_s3_bucket_policy" "landing" {
+resource "aws_s3_bucket_lifecycle_configuration" "landing" {
   bucket = aws_s3_bucket.landing.id
-  policy = data.aws_iam_policy_document.enforce_tls_landing.json
+
+  rule {
+    id     = "expire-and-cleanup"
+    status = "Enabled"
+
+    filter {} # applies to all objects
+
+    expiration {
+      days = 7
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
 }
+
 
 # Archive bucket
 resource "aws_s3_bucket" "archive" {

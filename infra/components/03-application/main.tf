@@ -80,7 +80,7 @@ resource "aws_security_group" "aggregator_lambda_sg" {
 
 resource "aws_lambda_function" "aggregator" {
   function_name = var.lambda_function_name
-  handler       = "app.handler"      # <─ matches the file name above
+  handler       = "data_aggregator.app.handler"
   runtime       = "python3.13"       # or python3.12, 3.11, …
   architectures = ["arm64"]
 

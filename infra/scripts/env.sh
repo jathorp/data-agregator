@@ -78,34 +78,28 @@ for component_path in "${COMPONENTS_TO_RUN[@]}"; do
   echo
 
   if [ -d "$component_path" ] && [ -f "$component_path/tf.sh" ]; then
-    # --- THIS IS THE CORRECTED LOGIC ---
-    # 1. Get component-specific variables
-    component_specific_vars=""
+    # --- THIS IS THE FINAL CORRECTED LOGIC ---
+    # 1. Start with the common variables that all components need.
+    TF_VAR_FILE_ARGS=("-var-file=../../environments/$ENVIRONMENT/common.tfvars")
+
+    # 2. Add component-specific var files using a case statement.
     case "$component_path" in
       "components/01-network")
-        component_specific_vars="network.tfvars"
+        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/network.tfvars")
         ;;
       "components/02-stateful-resources")
-        component_specific_vars="stateful-resources.tfvars"
+        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/stateful-resources.tfvars")
+        # This component needs remote state info, which is in the observability file.
+        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/observability.tfvars")
         ;;
       "components/03-application")
-        # Application needs its own vars and the lambda artifact var from common
-        component_specific_vars="application.tfvars"
+        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/application.tfvars")
+        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/observability.tfvars")
         ;;
       "components/04-observability")
-        component_specific_vars="observability.tfvars"
+        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/observability.tfvars")
         ;;
     esac
-
-    # 2. Build the full list of arguments for tf.sh
-    TF_VAR_FILE_ARGS=()
-    # ALWAYS add common.tfvars first, as it contains project/env/region
-    TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/common.tfvars")
-
-    # Then add the component-specific var file, if it has one
-    if [ -n "$component_specific_vars" ]; then
-      TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/$component_specific_vars")
-    fi
 
     (
       cd "$component_path"

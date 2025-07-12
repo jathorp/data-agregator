@@ -3,8 +3,8 @@
 set -e
 
 # --- Environment Orchestrator Script ---
-# This script orchestrates the deployment or destruction of an entire environment
-# by calling the 'tf.sh' wrapper in each component directory in the correct order.
+# This script orchestrates Terraform commands across all components for an entire environment.
+# It can run on all components in order or on a single, specified component.
 
 # Add some color to the output
 C_RED='\033[0;31m'
@@ -25,7 +25,22 @@ COMPONENTS_TO_RUN=(
 show_help() {
   cat << EOF
 Orchestrates Terraform commands across all components for an entire environment.
-Usage: ./scripts/env.sh <environment> <command> [terraform_options]
+
+Usage: ./scripts/env.sh <environment> <command> [--component <name>] [terraform_options]
+
+Arguments:
+  <environment>   The target environment (e.g., "dev", "prod").
+  <command>       The Terraform command to run (e.g., "plan", "apply", "destroy").
+
+Options:
+  --component <name>  Run the command only on a specific component (e.g., "01-network").
+
+Examples:
+  # Plan the entire 'dev' environment
+  ./scripts/env.sh dev plan
+
+  # Apply changes only to the stateful resources component
+  ./scripts/env.sh dev apply --component 02-stateful-resources
 EOF
 }
 
@@ -37,24 +52,60 @@ fi
 ENVIRONMENT=$1
 COMMAND=$2
 shift 2
-TF_ARGS=("$@")
+
+# --- NEW: Parse optional --component flag and pass-through Terraform arguments ---
+SPECIFIC_COMPONENT=""
+TF_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --component)
+      SPECIFIC_COMPONENT="$2"
+      shift 2
+      ;;
+    *)
+      TF_ARGS+=("$1") # Save other args to pass to terraform
+      shift
+      ;;
+  esac
+done
 
 if [ -z "$ENVIRONMENT" ] || [ -z "$COMMAND" ]; then
-  echo -e "${C_RED}❌ Error: Missing arguments.${C_NC}" >&2
+  echo -e "${C_RED}❌ Error: Missing required arguments 'environment' and 'command'.${C_NC}" >&2
   show_help
   exit 1
 fi
 
+# --- NEW: Filter components if a specific one is requested ---
+if [ -n "$SPECIFIC_COMPONENT" ]; then
+  FOUND=0
+  for path in "${COMPONENTS_TO_RUN[@]}"; do
+    # Match if the path contains the component name (e.g., "01-network" in "components/01-network")
+    if [[ "$path" == *"$SPECIFIC_COMPONENT"* ]]; then
+      COMPONENTS_TO_RUN=("$path") # Replace the array with just the single component
+      FOUND=1
+      break
+    fi
+  done
+
+  if [[ $FOUND -eq 0 ]]; then
+    echo -e "${C_RED}❌ Error: Component '$SPECIFIC_COMPONENT' not found.${C_NC}" >&2
+    exit 1
+  fi
+fi
+
 # --- Main Logic ---
-# Resolve the project root directory. This script should be run from there.
-PROJECT_ROOT_DIR=$(pwd)
+PROJECT_ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." &> /dev/null && pwd)
+cd "$PROJECT_ROOT_DIR"
 
 # --- Destroy Logic ---
 if [ "$COMMAND" == "destroy" ]; then
-  echo -e "${C_RED}🔥🔥🔥  D A N G E R  🔥🔥🔥${C_NC}"
-  echo -e "${C_YELLOW}You are about to run a DESTRUCTIVE operation on the entire '$ENVIRONMENT' environment.${C_NC}"
-  echo "You have 10 seconds to cancel (Ctrl+C)..."
-  sleep 10
+  # This warning is especially important if running on the whole environment
+  if [ -z "$SPECIFIC_COMPONENT" ]; then
+    echo -e "${C_RED}🔥🔥🔥  D A N G E R  🔥🔥🔥${C_NC}"
+    echo -e "${C_YELLOW}You are about to run a DESTRUCTIVE operation on the ENTIRE '$ENVIRONMENT' environment.${C_NC}"
+    echo "You have 10 seconds to cancel (Ctrl+C)..."
+    sleep 10
+  fi
 
   REVERSED_COMPONENTS=()
   for i in $(seq $((${#COMPONENTS_TO_RUN[@]} - 1)) -1 0); do
@@ -66,9 +117,12 @@ fi
 echo -e "${C_BLUE}=====================================================${C_NC}"
 echo -e "Orchestrating Environment: ${C_GREEN}$ENVIRONMENT${C_NC}"
 echo -e "Orchestrating Command:     ${C_GREEN}$COMMAND${C_NC}"
+if [ -n "$SPECIFIC_COMPONENT" ]; then
+  echo -e "Target Component:        ${C_GREEN}$SPECIFIC_COMPONENT${C_NC}"
+fi
 echo -e "${C_BLUE}=====================================================${C_NC}"
 
-# Loop through each component and execute the command.
+# Loop through each component in the (potentially filtered) list and execute the command.
 for component_path in "${COMPONENTS_TO_RUN[@]}"; do
   component_name=$(basename "$component_path")
   echo
@@ -76,10 +130,10 @@ for component_path in "${COMPONENTS_TO_RUN[@]}"; do
   echo
 
   if [ -d "$component_path" ] && [ -f "$component_path/tf.sh" ]; then
-    # --- THIS IS THE CORRECTED LOGIC ---
-    # The paths must be relative to the component directory where terraform will run.
+    # Start with the common variables that all components need.
     TF_VAR_FILE_ARGS=("-var-file=../../environments/$ENVIRONMENT/common.tfvars")
 
+    # Add component-specific var files using a case statement.
     case "$component_path" in
       "components/01-network")
         TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/network.tfvars")
@@ -97,7 +151,6 @@ for component_path in "${COMPONENTS_TO_RUN[@]}"; do
         ;;
     esac
 
-    # Use a subshell to avoid polluting the main script's directory
     (
       cd "$component_path"
       ./tf.sh "$ENVIRONMENT" "$COMMAND" "${TF_VAR_FILE_ARGS[@]}" "${TF_ARGS[@]}"

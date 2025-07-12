@@ -14,7 +14,6 @@ C_YELLOW='\033[0;33m'
 C_NC='\033[0m' # No Color
 
 # --- Configuration ---
-# This array defines the correct CREATION order.
 COMPONENTS_TO_RUN=(
   "components/01-network"
   "components/02-stateful-resources"
@@ -46,8 +45,7 @@ fi
 
 ENVIRONMENT=$1
 COMMAND=$2
-shift 2 # Remove the first two arguments
-# Store all remaining arguments in a proper bash array to handle spaces
+shift 2
 TF_ARGS=("$@")
 
 if [ -z "$ENVIRONMENT" ] || [ -z "$COMMAND" ]; then
@@ -68,7 +66,6 @@ if [ "$COMMAND" == "destroy" ]; then
   echo "You have 10 seconds to cancel (Ctrl+C)..."
   sleep 10
 
-  # Correctly reverse the COMPONENTS_TO_RUN array for destruction
   REVERSED_COMPONENTS=()
   for i in $(seq $((${#COMPONENTS_TO_RUN[@]} - 1)) -1 0); do
     REVERSED_COMPONENTS+=("${COMPONENTS_TO_RUN[i]}")
@@ -89,7 +86,7 @@ for component_path in "${COMPONENTS_TO_RUN[@]}"; do
   echo
 
   if [ -d "$component_path" ] && [ -f "$component_path/tf.sh" ]; then
-    # --- REFACTORED: Use a portable 'case' statement instead of an associative array ---
+    # Use a case statement to determine the correct var files for each component
     vars_for_component=""
     case "$component_path" in
       "components/01-network")
@@ -110,14 +107,14 @@ for component_path in "${COMPONENTS_TO_RUN[@]}"; do
     TF_VAR_FILE_ARGS=()
     if [ -n "$vars_for_component" ]; then
       for var_file in $vars_for_component; do
-          TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/$var_file")
+          # --- THIS LINE IS THE FIX ---
+          # The path must be relative to the component directory where terraform will run.
+          TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/$var_file")
       done
     fi
 
-    # Use a subshell (...) to run the command.
     (
       cd "$component_path"
-      # Pass env, command, the specific var files, and any extra user args
       ./tf.sh "$ENVIRONMENT" "$COMMAND" "${TF_VAR_FILE_ARGS[@]}" "${TF_ARGS[@]}"
     )
   else

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Robust Lambda Deployment Script
+# Robust Lambda Deployment Script (v3 - Corrected Paths)
 #
 # This script can be run from any directory within the project. It automatically
-# locates the project root by searching for the 'pyproject.toml' file,
-# ensuring all paths are resolved correctly.
+# locates the project root (by finding 'pyproject.toml') and uses the correct
+# relative paths for the 'infra' subdirectory.
 #
 set -euo pipefail
 
@@ -57,14 +57,15 @@ echo "🔹 Project root found at: $PROJECT_ROOT"
 # This simplifies all subsequent path handling.
 cd "$PROJECT_ROOT"
 
-# --- Define Paths (now relative to the guaranteed project root) ---
-ENV_DIR="environments/$ENVIRONMENT"
+# --- Define Paths (Corrected to include the 'infra' directory) ---
+ENV_DIR="infra/environments/$ENVIRONMENT"
 COMMON_VARS_PATH="$ENV_DIR/common.tfvars"
 APP_VARS_PATH="$ENV_DIR/application.tfvars"
-ZIP_FILE_PATH="dist/lambda.zip"
+ZIP_FILE_PATH="dist/lambda.zip" # The 'dist' folder is at the root, which is correct.
 
 if [ ! -d "$ENV_DIR" ]; then
     echo -e "${C_RED}❌ Error: Environment directory not found at '$ENV_DIR'${C_NC}"
+    echo "   (Checked from project root: $PROJECT_ROOT)"
     exit 1
 fi
 
@@ -78,7 +79,14 @@ get_tf_var() {
 echo
 echo "🔹 Running build script..."
 # Run the build script using its path relative to the project root.
-scripts/build.sh
+# NOTE: Your build.sh is at the root level, so this is correct.
+if [ -f "build.sh" ]; then
+    ./build.sh
+else
+    echo -e "${C_RED}❌ Error: Build script not found at project root 'build.sh'${C_NC}"
+    exit 1
+fi
+
 
 if [ ! -f "$ZIP_FILE_PATH" ]; then
     echo -e "${C_RED}❌ Error: Build failed. Zip file not found at '$ZIP_FILE_PATH'${C_NC}"

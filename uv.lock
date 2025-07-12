@@ -3,19 +3,6 @@ revision = 2
 requires-python = ">=3.13"
 
 [[package]]
-name = "aws-lambda-powertools"
-version = "3.16.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "jmespath" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3b/b9/7e69ec5b47f4c899f0f96f4d1efaa5511ebe753c1cf3d8142ada2ce47381/aws_lambda_powertools-3.16.0.tar.gz", hash = "sha256:df0e5b6e575bf8fd30101d3c39358deb3ccbed195756343e44af34d05345f128", size = 683586, upload-time = "2025-07-02T10:39:41.513Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/8d/6f/6ffa68d026d26e4be251bff053993e73780e4a2629e755fcbb5432cc77e9/aws_lambda_powertools-3.16.0-py3-none-any.whl", hash = "sha256:b37843d4873b88fedd8eed507fdbf3eb7193e48a6b662b1e7b41e741cdcc765b", size = 824530, upload-time = "2025-07-02T10:39:39.416Z" },
-]
-
-[[package]]
 name = "aws-xray-sdk"
 version = "2.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -227,11 +214,6 @@ wheels = [
 name = "data-aggregator"
 version = "0.1.0"
 source = { editable = "." }
-dependencies = [
-    { name = "aws-lambda-powertools" },
-    { name = "boto3" },
-    { name = "requests" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -242,16 +224,10 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-mock" },
-    { name = "requests-mock" },
     { name = "ruff" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "aws-lambda-powertools", specifier = ">=3.15.1" },
-    { name = "boto3", specifier = ">=1.39.1" },
-    { name = "requests", specifier = ">=2.32.4" },
-]
 
 [package.metadata.requires-dev]
 dev = [
@@ -262,7 +238,6 @@ dev = [
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-cov", specifier = ">=6.2.1" },
     { name = "pytest-mock", specifier = ">=3.14.1" },
-    { name = "requests-mock", specifier = ">=1.12.1" },
     { name = "ruff", specifier = ">=0.12.1" },
 ]
 
@@ -518,18 +493,6 @@ wheels = [
 ]
 
 [[package]]
-name = "requests-mock"
-version = "1.12.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/92/32/587625f91f9a0a3d84688bf9cfc4b2480a7e8ec327cefd0ff2ac891fd2cf/requests-mock-1.12.1.tar.gz", hash = "sha256:e9e12e333b525156e82a3c852f22016b9158220d2f47454de9cae8a77d371401", size = 60901, upload-time = "2024-03-29T03:54:29.446Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/97/ec/889fbc557727da0c34a33850950310240f2040f3b1955175fdb2b36a8910/requests_mock-1.12.1-py2.py3-none-any.whl", hash = "sha256:b1e37054004cdd5e56c84454cc7df12b25f90f382159087f4b6915aaeef39563", size = 27695, upload-time = "2024-03-29T03:54:27.64Z" },
-]
-
-[[package]]
 name = "responses"
 version = "0.25.7"
 source = { registry = "https://pypi.org/simple" }
@@ -605,15 +568,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/42/c1/45038f259d6741c252801044e184fec4dbaeff939a58f6160d7c32bf4975/types_s3transfer-0.13.0.tar.gz", hash = "sha256:203dadcb9865c2f68fb44bc0440e1dc05b79197ba4a641c0976c26c9af75ef52", size = 14175, upload-time = "2025-05-28T02:16:07.614Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/5d/6bbe4bf6a79fb727945291aef88b5ecbdba857a603f1bbcf1a6be0d3f442/types_s3transfer-0.13.0-py3-none-any.whl", hash = "sha256:79c8375cbf48a64bff7654c02df1ec4b20d74f8c5672fc13e382f593ca5565b3", size = 19588, upload-time = "2025-05-28T02:16:06.709Z" },
-]
-
-[[package]]
-name = "typing-extensions"
-version = "4.14.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/98/5a/da40306b885cc8c09109dc2e1abd358d5684b1425678151cdaed4731c822/typing_extensions-4.14.1.tar.gz", hash = "sha256:38b39f4aeeab64884ce9f74c94263ef78f3c22467c8724005483154c26648d36", size = 107673, upload-time = "2025-07-04T13:28:34.16Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b5/00/d631e67a838026495268c2f6884f3711a15a9a2a96cd244fdaea53b823fb/typing_extensions-4.14.1-py3-none-any.whl", hash = "sha256:d1e1e3b58374dc93031d6eda2420a48ea44a36c2b4766a4fdeb3710755731d76", size = 43906, upload-time = "2025-07-04T13:28:32.743Z" },
 ]
 
 [[package]]

@@ -1,31 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root_dir="$(dirname "$0")"
-cd "$root_dir"
+cd "$(dirname "$0")"
 
-runtime_py="3.13"
-plat="aarch64-manylinux2014"
+echo "🔹 Cleaning up..."
+rm -rf build dist
+mkdir -p build dist
 
-echo "🔹 Cleaning up old artifacts..."
-rm -rf build/ dist/ lambda.zip
-mkdir -p build/ dist/
+echo "🔹 Copying app.py..."
+cp src/app.py build/
 
-echo "🔹 Installing dependencies..."
-uv pip install \
-  --no-installer-metadata \
-  --no-compile-bytecode \
-  --python-platform "$plat" \
-  --python "$runtime_py" \
-  --target build/ \
-  --requirement uv.lock
+echo "🔹 Creating ZIP..."
+( cd build && zip -qr ../dist/lambda.zip . )
 
-echo "🔹 Adding application source code..."
-rsync -av --exclude='__pycache__' src/ build/
-
-echo "🔹 Creating zip archive..."
-cd build
-zip -qr ../dist/lambda.zip .
-cd ..
-
-echo "✅ Lambda artifact created at $(pwd)/dist/lambda.zip"
+echo "✅ Lambda artifact: $(pwd)/dist/lambda.zip"

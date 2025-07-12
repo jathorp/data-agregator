@@ -102,27 +102,28 @@ echo -e "    Function Name:   ${C_GREEN}${FUNCTION_NAME}${C_NC}"; echo -e "    A
 echo -e "    Artifact Key:    ${C_YELLOW}${LAMBDA_S3_KEY}${C_NC}"; echo -e "    AWS Region:      ${C_YELLOW}${AWS_REGION}${C_NC}"
 if [ ${#AWS_PROFILE_ARRAY[@]} -gt 0 ]; then echo -e "    AWS Profile:     ${C_YELLOW}${AWS_PROFILE_ARRAY[1]}${C_NC}"; fi
 echo -e "${C_YELLOW}---------------------------------------------------${C_NC}"
-# CORRECTED: Added -r for robust "raw" reading, satisfying linters and best practices.
 read -r -p "Press Enter to continue or Ctrl+C to abort..."
 
 # --- Step 3: Upload to S3 ---
 S3_URI="s3://${ARTIFACT_BUCKET}/${LAMBDA_S3_KEY}"; echo; echo "🔹 Uploading artifact to $S3_URI..."
 if [ "$VERBOSE" = true ]; then
-  aws "${AWS_PROFILE_ARRAY[@]}" s3 cp "$ZIP_FILE_PATH" "$S3_URI" --region "$AWS_REGION"
+  # CORRECTED: Use safe expansion for the optional profile array.
+  aws "${AWS_PROFILE_ARRAY[@]:+${AWS_PROFILE_ARRAY[@]}}" s3 cp "$ZIP_FILE_PATH" "$S3_URI" --region "$AWS_REGION"
 else
-  aws "${AWS_PROFILE_ARRAY[@]}" s3 cp "$ZIP_FILE_PATH" "$S3_URI" --region "$AWS_REGION" > /dev/null
+  aws "${AWS_PROFILE_ARRAY[@]:+${AWS_PROFILE_ARRAY[@]}}" s3 cp "$ZIP_FILE_PATH" "$S3_URI" --region "$AWS_REGION" > /dev/null
 fi
 echo "    ✅ Upload complete."
 
 # --- Step 4: Check for Lambda and Update ---
 echo; echo "🔹 Checking for existing Lambda function..."
-# We suppress stdout to hide the successful JSON response, but allow stderr to show actual AWS errors (e.g., permissions).
-if aws "${AWS_PROFILE_ARRAY[@]}" lambda get-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" > /dev/null 2>&1; then
+# CORRECTED: Use safe expansion for the optional profile array.
+if aws "${AWS_PROFILE_ARRAY[@]:+${AWS_PROFILE_ARRAY[@]}}" lambda get-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" > /dev/null 2>&1; then
   echo "    ✅ Function exists. Proceeding with code update."
   if [ "$VERBOSE" = true ]; then
-    aws "${AWS_PROFILE_ARRAY[@]}" lambda update-function-code --function-name "$FUNCTION_NAME" --s3-bucket "$ARTIFACT_BUCKET" --s3-key "$LAMBDA_S3_KEY" --region "$AWS_REGION" --publish
+    # CORRECTED: Use safe expansion for the optional profile array.
+    aws "${AWS_PROFILE_ARRAY[@]:+${AWS_PROFILE_ARRAY[@]}}" lambda update-function-code --function-name "$FUNCTION_NAME" --s3-bucket "$ARTIFACT_BUCKET" --s3-key "$LAMBDA_S3_KEY" --region "$AWS_REGION" --publish
   else
-    aws "${AWS_PROFILE_ARRAY[@]}" lambda update-function-code --function-name "$FUNCTION_NAME" --s3-bucket "$ARTIFACT_BUCKET" --s3-key "$LAMBDA_S3_KEY" --region "$AWS_REGION" --publish > /dev/null
+    aws "${AWS_PROFILE_ARRAY[@]:+${AWS_PROFILE_ARRAY[@]}}" lambda update-function-code --function-name "$FUNCTION_NAME" --s3-bucket "$ARTIFACT_BUCKET" --s3-key "$LAMBDA_S3_KEY" --region "$AWS_REGION" --publish > /dev/null
   fi
   echo; echo -e "${C_GREEN}✅ Deployment complete! The Lambda function has been updated.${C_NC}"
 else

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Exit immediately if a command exits with a non-zero status, and fail on unset vars.
+# Exit immediately on error or unset variables
 set -eu
 
 # --- Environment Orchestrator Script ---
@@ -13,7 +13,7 @@ C_BLUE='\033[0;34m'
 C_YELLOW='\033[0;33m'
 C_NC='\033[0m' # No Color
 
-# --- Configuration ---
+# --- Components ---
 COMPONENTS_TO_RUN=(
   "components/01-network"
   "components/02-stateful-resources"
@@ -23,21 +23,19 @@ COMPONENTS_TO_RUN=(
 
 FAILED_COMPONENTS=()
 
-# --- Usage ---
+# --- Help ---
 show_help() {
   cat << EOF
-Orchestrates Terraform commands across all components for an environment.
-
 Usage: ./scripts/env.sh <environment> <command> [--component <name>] [--list-components] [terraform_options]
 
 Arguments:
   <environment>           Environment to target (e.g., dev, prod)
-  <command>               Terraform command (e.g., plan, apply, destroy)
+  <command>                Terraform command (e.g., plan, apply, destroy)
 
 Options:
-  --component <name>      Run only the specified component (e.g., 01-network)
-  --list-components       List available components and exit
-  -h, help                Show this help
+  --component <name>       Run only the specified component (e.g., 01-network)
+  --list-components        List available components and exit
+  -h, help                 Show this help
 
 Examples:
   ./scripts/env.sh dev plan
@@ -104,14 +102,14 @@ if [[ -n "$SPECIFIC_COMPONENT" ]]; then
   fi
 fi
 
-# --- Destroy Confirmation if no --component ---
+# --- Destroy Confirmation ---
 if [[ "$COMMAND" == "destroy" && -z "$SPECIFIC_COMPONENT" ]]; then
   echo -e "${C_RED}🔥🔥🔥  D A N G E R  🔥🔥🔥${C_NC}"
   echo -e "${C_YELLOW}You are about to destroy the entire '$ENVIRONMENT' environment.${C_NC}"
   echo "You have 10 seconds to cancel (Ctrl+C)..."
   sleep 10
 
-  # reverse components for destroy
+  # reverse components
   REVERSED=()
   for (( i=${#COMPONENTS_TO_RUN[@]}-1; i>=0; i-- )); do
     REVERSED+=("${COMPONENTS_TO_RUN[$i]}")
@@ -155,7 +153,7 @@ for component_path in "${COMPONENTS_TO_RUN[@]}"; do
 
     if ! (
       cd "$component_path"
-      ./tf.sh "$ENVIRONMENT" "$COMMAND" "${TF_VAR_FILE_ARGS[@]}" "${TF_ARGS[@]}"
+      ./tf.sh "$ENVIRONMENT" "$COMMAND" "${TF_VAR_FILE_ARGS[@]}" "${TF_ARGS[@]:-}"
     ); then
       echo -e "${C_RED}❌ $component_name failed.${C_NC}"
       FAILED_COMPONENTS+=("$component_name")

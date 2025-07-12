@@ -1,4 +1,4 @@
-# components/02-stateful-resources/main.tf – **KMS-free** version
+# components/02-stateful-resources/main.tf — KMS-free, stable, clear
 
 locals {
   common_tags = {
@@ -8,13 +8,7 @@ locals {
   }
 }
 
-resource "random_id" "suffix" {
-  byte_length = 4
-}
-
-# ────────────────────────────────────────────────────────────────────────────────
-# Lambda execution role (shell only – component 03 will attach policies)
-# ────────────────────────────────────────────────────────────────────────────────
+# Lambda Execution Role (policies attached elsewhere)
 resource "aws_iam_role" "lambda_exec_role" {
   name = var.lambda_role_name
   tags = local.common_tags
@@ -29,11 +23,13 @@ resource "aws_iam_role" "lambda_exec_role" {
   })
 }
 
-# ────────────────────────────────────────────────────────────────────────────────
-# S3 Buckets
-# ────────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────
+# S3 Buckets — Deterministic names, KMS-free
+# ──────────────────────────────────────────────────────────────
+
+# Access Logs Bucket
 resource "aws_s3_bucket" "access_logs" {
-  bucket        = "${var.project_name}-access-logs-${random_id.suffix.hex}"
+  bucket        = "${var.project_name}-s3-access-logs-${var.environment_name}"
   force_destroy = true
   tags          = merge(local.common_tags, { Purpose = "S3 Access Logs" })
 }
@@ -41,7 +37,9 @@ resource "aws_s3_bucket" "access_logs" {
 resource "aws_s3_bucket_server_side_encryption_configuration" "access_logs" {
   bucket = aws_s3_bucket.access_logs.id
   rule {
-    apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
   }
 }
 
@@ -63,9 +61,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "access_logs" {
   }
 }
 
-# Landing bucket
+# Landing Bucket
 resource "aws_s3_bucket" "landing" {
-  bucket = "${var.landing_bucket_name}-${random_id.suffix.hex}"
+  bucket = var.landing_bucket_name
   tags   = merge(local.common_tags, { Name = var.landing_bucket_name })
 }
 
@@ -111,11 +109,14 @@ resource "aws_s3_bucket_policy" "landing" {
   policy = data.aws_iam_policy_document.enforce_tls_landing.json
 }
 
-# Archive bucket
+# Archive Bucket
 resource "aws_s3_bucket" "archive" {
-  bucket = "${var.archive_bucket_name}-${random_id.suffix.hex}"
-  lifecycle { prevent_destroy = true }
-  tags = merge(local.common_tags, { Name = var.archive_bucket_name })
+  bucket = var.archive_bucket_name
+  tags   = merge(local.common_tags, { Name = var.archive_bucket_name })
+
+  lifecycle {
+    prevent_destroy = var.environment_name != "dev"
+  }
 }
 
 resource "aws_s3_bucket_logging" "archive" {
@@ -164,10 +165,9 @@ resource "aws_s3_bucket_policy" "archive" {
   policy = data.aws_iam_policy_document.enforce_tls_archive.json
 }
 
-# --- Distribution Bucket ---
-# This new bucket is the "mailbox" for the on-premise service to pull from.
+# Distribution Bucket
 resource "aws_s3_bucket" "distribution" {
-  bucket = "${var.distribution_bucket_name}-${random_id.suffix.hex}"
+  bucket = var.distribution_bucket_name
   tags   = merge(local.common_tags, { Name = var.distribution_bucket_name })
 }
 
@@ -208,9 +208,9 @@ resource "aws_s3_bucket_policy" "distribution" {
   policy = data.aws_iam_policy_document.enforce_tls_distribution.json
 }
 
-# ────────────────────────────────────────────────────────────────────────────────
-# SQS – uses AWS-managed encryption (`alias/aws/sqs`)
-# ────────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────
+# SQS Queues
+# ──────────────────────────────────────────────────────────────
 resource "aws_sqs_queue" "dlq" {
   name                    = var.dlq_name
   sqs_managed_sse_enabled = true
@@ -256,9 +256,9 @@ resource "aws_s3_bucket_notification" "landing_to_sqs" {
   depends_on = [aws_sqs_queue_policy.s3_to_sqs]
 }
 
-# ────────────────────────────────────────────────────────────────────────────────
-# DynamoDB – encrypted with AWS-owned keys (default)
-# ────────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────
+# DynamoDB Table
+# ──────────────────────────────────────────────────────────────
 resource "aws_dynamodb_table" "idempotency" {
   name         = var.idempotency_table_name
   billing_mode = "PAY_PER_REQUEST"
@@ -273,10 +273,13 @@ resource "aws_dynamodb_table" "idempotency" {
     attribute_name = "ttl"
     enabled        = true
   }
-  point_in_time_recovery { enabled = true }
 
-  server_side_encryption { enabled = true } # AWS-managed key
+  point_in_time_recovery { enabled = true }
+  server_side_encryption { enabled = true }
 
   tags = merge(local.common_tags, { Name = var.idempotency_table_name })
-  lifecycle { prevent_destroy = true }
+
+  lifecycle {
+    prevent_destroy = var.environment_name != "dev"
+  }
 }

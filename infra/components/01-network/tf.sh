@@ -4,13 +4,14 @@ set -e
 
 # --- Argument Parsing ---
 if [ -z "$1" ] || [ -z "$2" ]; then
-  echo "Usage: ./tf.sh <environment> <command> [var_file_args...]"
+  echo "Usage: ./tf.sh <environment> <command> [args...]"
+  echo "Example: ./tf.sh dev apply -auto-approve"
+  echo "         ./tf.sh dev import aws_s3_bucket.my_bucket my-bucket-name"
   exit 1
 fi
 ENVIRONMENT=$1
 COMMAND=$2
 shift 2
-# All remaining arguments are passed directly to terraform
 TERRAFORM_ARGS=("$@")
 
 # --- Backend Configuration ---
@@ -27,7 +28,10 @@ echo "🔹 Initializing Terraform..."
 terraform init -backend-config="$BACKEND_CONFIG_PATH"
 
 # --- Run the main Terraform command ---
-# The TERRAFORM_ARGS array will contain all the -var-file arguments from the orchestrator
-# as well as any extra options like -auto-approve.
 echo "🔹 Running terraform $COMMAND..."
-terraform "$COMMAND" "${TERRAFORM_ARGS[@]}"
+if [[ "$COMMAND" == "import" ]]; then
+    # Import does not use var-files
+    terraform import "${TERRAFORM_ARGS[@]}"
+else
+    terraform "$COMMAND" "${TERRAFORM_ARGS[@]}"
+fi

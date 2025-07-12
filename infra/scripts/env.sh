@@ -17,7 +17,6 @@ C_NC='\033[0m' # No Color
 # Components in the correct order for CREATION.
 # Destruction will automatically use the reverse of this order.
 COMPONENTS=(
-  "components/00-security"
   "components/01-network"
   "components/02-stateful-resources"
   "components/03-application"

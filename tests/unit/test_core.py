@@ -3,68 +3,59 @@
 import gzip
 import hashlib
 from io import BytesIO
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from src.data_aggregator.core import process_and_deliver_batch, create_gzipped_bundle_stream
+from src.data_aggregator.core import create_gzipped_bundle_stream, process_and_stage_batch
+
 
 
 @patch("src.data_aggregator.core.create_gzipped_bundle_stream")
-def test_process_and_deliver_batch_happy_path(mock_create_bundle):
+def test_process_and_stage_batch_happy_path(mock_create_bundle):
     """
-    Tests the orchestration logic of process_and_deliver_batch in isolation.
+    Tests the orchestration logic of process_and_stage_batch, verifying the dual-write.
     """
     # 1. ARRANGE
     mock_s3_client = MagicMock()
-    mock_nifi_client = MagicMock()
 
-    # Configure the mock bundle function to return a fake file and hash.
-    # The 'with' statement in the original code expects a context manager.
-    mock_bundle_file = BytesIO(b"fake gzipped content")
+    # MODIFIED: Use a MagicMock instead of a real BytesIO object.
+    # spec=BytesIO ensures our mock behaves like a real file-like object.
+    mock_bundle_file = MagicMock(spec=BytesIO)
+
     mock_content_hash = "fake_hash_123"
     mock_create_bundle.return_value.__enter__.return_value = (
         mock_bundle_file,
         mock_content_hash,
     )
 
-    test_records = [
-        {"s3": {"bucket": {"name": "test-bucket"}, "object": {"key": "file1.txt"}}},
-    ]
+    test_records = [{"s3": {"bucket": {"name": "test-bucket"}, "object": {"key": "file1.txt"}}}]
     test_archive_bucket = "test-archive"
+    test_distribution_bucket = "test-distribution"
     test_archive_key = "bundle-123.gz"
-    test_read_timeout = 15
 
     # 2. ACT
-    content_hash = process_and_deliver_batch(
+    content_hash = process_and_stage_batch(
         records=test_records,
         s3_client=mock_s3_client,
-        nifi_client=mock_nifi_client,
         archive_bucket=test_archive_bucket,
+        distribution_bucket=test_distribution_bucket,
         archive_key=test_archive_key,
-        read_timeout=test_read_timeout,
     )
 
     # 3. ASSERT
-    # Verify the bundle creation was called correctly.
     mock_create_bundle.assert_called_once_with(mock_s3_client, test_records)
 
-    # Verify the bundle was uploaded to S3 with the correct details.
-    mock_s3_client.upload_gzipped_bundle.assert_called_once_with(
-        bucket=test_archive_bucket,
-        key=test_archive_key,
-        file_obj=mock_bundle_file,
-        content_hash=mock_content_hash,
-    )
+    expected_calls = [
+        call(bucket=test_archive_bucket, key=test_archive_key, file_obj=mock_bundle_file, content_hash=mock_content_hash),
+        call(bucket=test_distribution_bucket, key=test_archive_key, file_obj=mock_bundle_file, content_hash=mock_content_hash),
+    ]
+    mock_s3_client.upload_gzipped_bundle.assert_has_calls(expected_calls, any_order=True)
+    assert mock_s3_client.upload_gzipped_bundle.call_count == 2
 
-    # Verify the bundle was sent to NiFi with the correct details.
-    mock_nifi_client.post_bundle.assert_called_once_with(
-        data=mock_bundle_file,
-        content_hash=mock_content_hash,
-        read_timeout=test_read_timeout,
-    )
+    # This assertion will now work correctly on the MagicMock.
+    mock_bundle_file.seek.assert_called_once_with(0)
 
-    # Verify the final hash is returned correctly.
     assert content_hash == mock_content_hash
 
 def test_create_gzipped_bundle_stream_creates_valid_bundle():
@@ -127,23 +118,21 @@ def test_create_gzipped_bundle_stream_creates_valid_bundle():
     assert b"--- END file2.txt ---" in decompressed_content
 
 
-def test_process_and_deliver_batch_raises_error_for_empty_records():
+def test_process_and_stage_batch_raises_error_for_empty_records():
     """
     Verifies that the function raises a ValueError if called with an empty list of records.
     """
     # 1. ARRANGE
     mock_s3_client = MagicMock()
-    mock_nifi_client = MagicMock()
 
     # 2. ACT & ASSERT
     with pytest.raises(ValueError, match="Cannot process an empty batch of records."):
-        process_and_deliver_batch(
-            records=[],  # Empty list of records
+        process_and_stage_batch(
+            records=[],
             s3_client=mock_s3_client,
-            nifi_client=mock_nifi_client,
             archive_bucket="any-bucket",
+            distribution_bucket="any-distribution-bucket",
             archive_key="any-key",
-            read_timeout=10,
         )
 
 def test_create_gzipped_bundle_stream_handles_empty_file():

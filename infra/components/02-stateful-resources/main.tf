@@ -114,9 +114,9 @@ resource "aws_s3_bucket" "archive" {
   bucket = var.archive_bucket_name
   tags   = merge(local.common_tags, { Name = var.archive_bucket_name })
 
-  lifecycle {
-    prevent_destroy = False
-  }
+  # lifecycle {
+  #   prevent_destroy = True
+  # }
 }
 
 resource "aws_s3_bucket_logging" "archive" {
@@ -279,7 +279,7 @@ resource "aws_dynamodb_table" "idempotency" {
 
   tags = merge(local.common_tags, { Name = var.idempotency_table_name })
 
-  lifecycle {
-    prevent_destroy = False
-  }
+  # lifecycle {
+  #   prevent_destroy = True
+  # }
 }

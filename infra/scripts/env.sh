@@ -14,15 +14,6 @@ C_YELLOW='\033[0;33m'
 C_NC='\033[0m' # No Color
 
 # --- Configuration ---
-# Use a Bash Associative Array to map components to their required var files.
-# This is the key to providing the correct variables to each component.
-declare -A COMPONENT_VARS
-COMPONENT_VARS=(
-  ["components/01-network"]="network.tfvars"
-  ["components/02-stateful-resources"]="stateful-resources.tfvars"
-  ["components/03-application"]="common.tfvars application.tfvars"
-  ["components/04-observability"]="observability.tfvars"
-)
 # This array defines the correct CREATION order.
 COMPONENTS_TO_RUN=(
   "components/01-network"
@@ -45,9 +36,6 @@ Arguments:
 Examples:
   # Plan changes for the entire 'dev' environment
   ./scripts/env.sh dev plan
-
-  # Apply changes to the 'prod' environment (will prompt for each component)
-  ./scripts/env.sh prod apply
 EOF
 }
 
@@ -58,8 +46,8 @@ fi
 
 ENVIRONMENT=$1
 COMMAND=$2
-shift 2 # Remove the first two arguments (env and command)
-# CORRECTED: Store all remaining arguments in a proper bash array
+shift 2 # Remove the first two arguments
+# Store all remaining arguments in a proper bash array to handle spaces
 TF_ARGS=("$@")
 
 if [ -z "$ENVIRONMENT" ] || [ -z "$COMMAND" ]; then
@@ -69,7 +57,6 @@ if [ -z "$ENVIRONMENT" ] || [ -z "$COMMAND" ]; then
 fi
 
 # --- Main Logic ---
-# Resolve the project root directory and change into it. This makes all subsequent paths consistent.
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 PROJECT_ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 cd "$PROJECT_ROOT_DIR"
@@ -86,7 +73,6 @@ if [ "$COMMAND" == "destroy" ]; then
   for i in $(seq $((${#COMPONENTS_TO_RUN[@]} - 1)) -1 0); do
     REVERSED_COMPONENTS+=("${COMPONENTS_TO_RUN[i]}")
   done
-  # Overwrite the original array with the reversed one
   COMPONENTS_TO_RUN=("${REVERSED_COMPONENTS[@]}")
 fi
 
@@ -103,20 +89,32 @@ for component_path in "${COMPONENTS_TO_RUN[@]}"; do
   echo
 
   if [ -d "$component_path" ] && [ -f "$component_path/tf.sh" ]; then
-    # Look up the specific var files for this component
-    vars_for_component=${COMPONENT_VARS[$component_path]}
+    # --- REFACTORED: Use a portable 'case' statement instead of an associative array ---
+    vars_for_component=""
+    case "$component_path" in
+      "components/01-network")
+        vars_for_component="network.tfvars"
+        ;;
+      "components/02-stateful-resources")
+        vars_for_component="stateful-resources.tfvars"
+        ;;
+      "components/03-application")
+        vars_for_component="common.tfvars application.tfvars"
+        ;;
+      "components/04-observability")
+        vars_for_component="observability.tfvars"
+        ;;
+    esac
 
     # Build the -var-file arguments array
     TF_VAR_FILE_ARGS=()
     if [ -n "$vars_for_component" ]; then
       for var_file in $vars_for_component; do
-          # The path is now relative to the project root where the script is running
           TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/$var_file")
       done
     fi
 
-    # Use a subshell (...) to run the command. This means the 'cd' command
-    # only affects this single loop iteration, which is safer.
+    # Use a subshell (...) to run the command.
     (
       cd "$component_path"
       # Pass env, command, the specific var files, and any extra user args

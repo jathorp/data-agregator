@@ -1,11 +1,5 @@
 # components/02-stateful-resources/data.tf – matches the simplified main.tf
 
-# Define the Terraform state bucket name in one central place for this component.
-# This avoids hardcoding the same string in multiple data blocks below.
-locals {
-  remote_state_bucket = "data-aggregator-tfstate-dev"
-}
-
 # --- Data sources to get general AWS account information ---
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}

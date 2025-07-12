@@ -8,6 +8,11 @@ variable "environment_name" {
   type        = string
 }
 
+variable "remote_state_bucket" {
+  description = "The name of the S3 bucket where Terraform state is stored."
+  type        = string
+}
+
 variable "aws_region" {
   description = "The AWS region to deploy resources into."
   type        = string

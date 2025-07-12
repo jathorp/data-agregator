@@ -115,7 +115,7 @@ resource "aws_s3_bucket" "archive" {
   tags   = merge(local.common_tags, { Name = var.archive_bucket_name })
 
   lifecycle {
-    prevent_destroy = var.environment_name != "dev"
+    prevent_destroy = False
   }
 }
 
@@ -280,6 +280,6 @@ resource "aws_dynamodb_table" "idempotency" {
   tags = merge(local.common_tags, { Name = var.idempotency_table_name })
 
   lifecycle {
-    prevent_destroy = var.environment_name != "dev"
+    prevent_destroy = False
   }
 }

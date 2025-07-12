@@ -34,6 +34,15 @@ resource "aws_s3_bucket" "access_logs" {
   bucket        = "${var.project_name}-access-logs-${random_id.suffix.hex}"
   force_destroy = true
   tags          = merge(local.common_tags, { Purpose = "S3 Access Logs" })
+
+  # REFACTORED: Lifecycle rule moved inside the bucket resource
+  lifecycle_rule {
+    id      = "expire-logs-after-90-days"
+    enabled = true
+    expiration {
+      days = 90
+    }
+  }
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "access_logs" {
@@ -51,22 +60,24 @@ resource "aws_s3_bucket_public_access_block" "access_logs" {
   restrict_public_buckets = true
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "access_logs" {
-  bucket = aws_s3_bucket.access_logs.id
-  rule {
-    id     = "expire-logs-after-90-days"
-    status = "Enabled"
-    filter {}
-    expiration { days = 90 }
-  }
-}
-
 # ─────────────────────────────────────────────────────────────
 # Landing Bucket
 # ─────────────────────────────────────────────────────────────
 resource "aws_s3_bucket" "landing" {
   bucket = "${var.landing_bucket_name}-${random_id.suffix.hex}"
   tags   = merge(local.common_tags, { Name = var.landing_bucket_name })
+
+  # REFACTORED: Lifecycle rule moved inside the bucket resource
+  lifecycle_rule {
+    id      = "expire-and-cleanup"
+    enabled = true
+    expiration {
+      days = 7
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
 }
 
 resource "aws_s3_bucket_logging" "landing" {
@@ -95,17 +106,6 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "landing" {
   }
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "landing" {
-  bucket = aws_s3_bucket.landing.id
-  rule {
-    id     = "expire-and-cleanup"
-    status = "Enabled"
-    filter {}
-    expiration { days = 7 }
-    abort_incomplete_multipart_upload { days_after_initiation = 1 }
-  }
-}
-
 resource "aws_s3_bucket_policy" "landing" {
   bucket = aws_s3_bucket.landing.id
   policy = data.aws_iam_policy_document.enforce_tls_landing.json
@@ -115,9 +115,27 @@ resource "aws_s3_bucket_policy" "landing" {
 # Archive Bucket
 # ─────────────────────────────────────────────────────────────
 resource "aws_s3_bucket" "archive" {
-  bucket = "${var.archive_bucket_name}-${random_id.suffix.hex}"
-  lifecycle { prevent_destroy = true }
-  tags = merge(local.common_tags, { Name = var.archive_bucket_name })
+  bucket    = "${var.archive_bucket_name}-${random_id.suffix.hex}"
+  tags      = merge(local.common_tags, { Name = var.archive_bucket_name })
+
+  # CORRECTED: Conditional lifecycle.prevent_destroy
+  lifecycle { prevent_destroy = var.environment_name == "prod" }
+
+  # REFACTORED: Lifecycle rule moved inside the bucket resource
+  lifecycle_rule {
+    id      = "archive-to-deep-archive-and-cleanup"
+    enabled = true
+    transition {
+      days          = 30
+      storage_class = "DEEP_ARCHIVE"
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
 }
 
 resource "aws_s3_bucket_logging" "archive" {
@@ -146,26 +164,6 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "archive" {
   }
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "archive" {
-  bucket = aws_s3_bucket.archive.id
-  rule {
-    id     = "archive-to-deep-archive-and-cleanup"
-    status = "Enabled"
-    filter {}
-
-    transition {
-      days          = 30
-      storage_class = "DEEP_ARCHIVE"
-    }
-
-    abort_incomplete_multipart_upload { days_after_initiation = 7 }
-
-    expiration {
-      expired_object_delete_marker = true
-    }
-  }
-}
-
 resource "aws_s3_bucket_policy" "archive" {
   bucket = aws_s3_bucket.archive.id
   policy = data.aws_iam_policy_document.enforce_tls_archive.json
@@ -177,6 +175,18 @@ resource "aws_s3_bucket_policy" "archive" {
 resource "aws_s3_bucket" "distribution" {
   bucket = "${var.distribution_bucket_name}-${random_id.suffix.hex}"
   tags   = merge(local.common_tags, { Name = var.distribution_bucket_name })
+
+  # REFACTORED: Lifecycle rule moved inside the bucket resource
+  lifecycle_rule {
+    id      = "expire-unprocessed-files"
+    enabled = true
+    expiration {
+      days = 14
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
 }
 
 resource "aws_s3_bucket_logging" "distribution" {
@@ -200,21 +210,12 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "distribution" {
   }
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "distribution" {
-  bucket = aws_s3_bucket.distribution.id
-  rule {
-    id     = "expire-unprocessed-files"
-    status = "Enabled"
-    filter {}
-    expiration { days = 14 }
-    abort_incomplete_multipart_upload { days_after_initiation = 1 }
-  }
-}
-
 resource "aws_s3_bucket_policy" "distribution" {
   bucket = aws_s3_bucket.distribution.id
   policy = data.aws_iam_policy_document.enforce_tls_distribution.json
 }
+
+# [REMOVED] All separate aws_s3_bucket_lifecycle_configuration resources have been deleted.
 
 # ─────────────────────────────────────────────────────────────
 # SQS Queues (with redrive to DLQ)
@@ -240,7 +241,7 @@ resource "aws_sqs_queue" "main" {
 }
 
 resource "aws_sqs_queue_policy" "s3_to_sqs" {
-  queue_url = aws_sqs_queue.main.id
+  queue_url = aws_s3_queue.main.id
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
@@ -288,9 +289,9 @@ resource "aws_dynamodb_table" "idempotency" {
 
   point_in_time_recovery { enabled = true }
 
-  server_side_encryption { enabled = true } # AWS-managed key
+  server_side_encryption { enabled = true }
 
   tags = merge(local.common_tags, { Name = var.idempotency_table_name })
 
-  lifecycle { prevent_destroy = true }
+  lifecycle { prevent_destroy = var.environment_name == "prod" }
 }

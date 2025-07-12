@@ -49,7 +49,7 @@ data "aws_region" "current" {}
 
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.main.id
-  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+  service_name      = "com.amazonaws.${data.aws_region.current.id}.s3"
   vpc_endpoint_type = "Gateway"
   route_table_ids   = [for rt in aws_route_table.private : rt.id] # Associates with all private route tables
   tags              = local.common_tags
@@ -57,7 +57,7 @@ resource "aws_vpc_endpoint" "s3" {
 
 resource "aws_vpc_endpoint" "dynamodb" {
   vpc_id            = aws_vpc.main.id
-  service_name      = "com.amazonaws.${data.aws_region.current.name}.dynamodb"
+  service_name      = "com.amazonaws.${data.aws_region.current.id}.dynamodb"
   vpc_endpoint_type = "Gateway"
   route_table_ids   = [for rt in aws_route_table.private : rt.id]
   tags              = local.common_tags
@@ -81,7 +81,7 @@ resource "aws_security_group" "vpc_endpoints_sg" {
 # --- VPC Interface Endpoints for SQS & KMS ---
 resource "aws_vpc_endpoint" "sqs" {
   vpc_id              = aws_vpc.main.id
-  service_name        = "com.amazonaws.${data.aws_region.current.name}.sqs"
+  service_name        = "com.amazonaws.${data.aws_region.current.id}.sqs"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
   subnet_ids          = [for s in aws_subnet.private : s.id]
@@ -91,7 +91,7 @@ resource "aws_vpc_endpoint" "sqs" {
 
 resource "aws_vpc_endpoint" "kms" {
   vpc_id              = aws_vpc.main.id
-  service_name        = "com.amazonaws.${data.aws_region.current.name}.kms"
+  service_name        = "com.amazonaws.${data.aws_region.current.id}.kms"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
   subnet_ids          = [for s in aws_subnet.private : s.id]

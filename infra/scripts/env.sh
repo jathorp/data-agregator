@@ -14,9 +14,17 @@ C_YELLOW='\033[0;33m'
 C_NC='\033[0m' # No Color
 
 # --- Configuration ---
-# Components in the correct order for CREATION.
-# Destruction will automatically use the reverse of this order.
-COMPONENTS=(
+# Use a Bash Associative Array to map components to their required var files.
+# This is the key to providing the correct variables to each component.
+declare -A COMPONENT_VARS
+COMPONENT_VARS=(
+  ["components/01-network"]="network.tfvars"
+  ["components/02-stateful-resources"]="stateful-resources.tfvars"
+  ["components/03-application"]="common.tfvars application.tfvars"
+  ["components/04-observability"]="observability.tfvars"
+)
+# This array defines the correct CREATION order.
+COMPONENTS_TO_RUN=(
   "components/01-network"
   "components/02-stateful-resources"
   "components/03-application"
@@ -28,24 +36,18 @@ show_help() {
   cat << EOF
 Orchestrates Terraform commands across all components for an entire environment.
 
-Usage: ./env.sh <environment> <command> [terraform_options]
+Usage: ./scripts/env.sh <environment> <command> [terraform_options]
 
 Arguments:
   <environment>   The target environment (e.g., "dev", "prod").
-  <command>       The Terraform command to run on all components (e.g., "plan", "apply", "destroy").
+  <command>       The Terraform command to run (e.g., "plan", "apply", "destroy").
 
 Examples:
   # Plan changes for the entire 'dev' environment
-  ./env.sh dev plan
+  ./scripts/env.sh dev plan
 
   # Apply changes to the 'prod' environment (will prompt for each component)
-  ./env.sh prod apply
-
-  # Pass options through to Terraform for CI/CD (use with extreme caution)
-  ./env.sh dev apply -auto-approve
-
-  # Destroy the 'dev' environment (will prompt for each component)
-  ./env.sh dev destroy
+  ./scripts/env.sh prod apply
 EOF
 }
 
@@ -56,8 +58,9 @@ fi
 
 ENVIRONMENT=$1
 COMMAND=$2
-shift 2 # The rest of the arguments are passed through
-TF_ARGS="$@"
+shift 2 # Remove the first two arguments (env and command)
+# CORRECTED: Store all remaining arguments in a proper bash array
+TF_ARGS=("$@")
 
 if [ -z "$ENVIRONMENT" ] || [ -z "$COMMAND" ]; then
   echo -e "${C_RED}❌ Error: Missing arguments.${C_NC}" >&2
@@ -66,23 +69,25 @@ if [ -z "$ENVIRONMENT" ] || [ -z "$COMMAND" ]; then
 fi
 
 # --- Main Logic ---
-# Get the script's directory to resolve component paths.
+# Resolve the project root directory and change into it. This makes all subsequent paths consistent.
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
-cd "$SCRIPT_DIR"
+PROJECT_ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+cd "$PROJECT_ROOT_DIR"
 
-# Reverse the array for 'destroy' command.
+# --- Destroy Logic ---
 if [ "$COMMAND" == "destroy" ]; then
   echo -e "${C_RED}🔥🔥🔥  D A N G E R  🔥🔥🔥${C_NC}"
   echo -e "${C_YELLOW}You are about to run a DESTRUCTIVE operation on the entire '$ENVIRONMENT' environment.${C_NC}"
-  echo "This will call 'terraform destroy' on each component in reverse order."
   echo "You have 10 seconds to cancel (Ctrl+C)..."
   sleep 10
 
-  # Bash magic to reverse an array
-  for i in $(seq $((${#COMPONENTS[@]} - 1)) -1 0); do
-    REVERSED_COMPONENTS+=("${COMPONENTS[i]}")
+  # Correctly reverse the COMPONENTS_TO_RUN array for destruction
+  REVERSED_COMPONENTS=()
+  for i in $(seq $((${#COMPONENTS_TO_RUN[@]} - 1)) -1 0); do
+    REVERSED_COMPONENTS+=("${COMPONENTS_TO_RUN[i]}")
   done
-  COMPONENTS=("${REVERSED_COMPONENTS[@]}")
+  # Overwrite the original array with the reversed one
+  COMPONENTS_TO_RUN=("${REVERSED_COMPONENTS[@]}")
 fi
 
 echo -e "${C_BLUE}=====================================================${C_NC}"
@@ -91,18 +96,31 @@ echo -e "Orchestrating Command:     ${C_GREEN}$COMMAND${C_NC}"
 echo -e "${C_BLUE}=====================================================${C_NC}"
 
 # Loop through each component and execute the command.
-for component_path in "${COMPONENTS[@]}"; do
-  # Get just the directory name for logging.
+for component_path in "${COMPONENTS_TO_RUN[@]}"; do
   component_name=$(basename "$component_path")
   echo
   echo -e "${C_YELLOW}--- Executing: $component_name ---${C_NC}"
   echo
 
   if [ -d "$component_path" ] && [ -f "$component_path/tf.sh" ]; then
+    # Look up the specific var files for this component
+    vars_for_component=${COMPONENT_VARS[$component_path]}
+
+    # Build the -var-file arguments array
+    TF_VAR_FILE_ARGS=()
+    if [ -n "$vars_for_component" ]; then
+      for var_file in $vars_for_component; do
+          # The path is now relative to the project root where the script is running
+          TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/$var_file")
+      done
+    fi
+
+    # Use a subshell (...) to run the command. This means the 'cd' command
+    # only affects this single loop iteration, which is safer.
     (
       cd "$component_path"
-      # Pass the environment, command, and any extra arguments to the component wrapper.
-      ./tf.sh "$ENVIRONMENT" "$COMMAND" $TF_ARGS
+      # Pass env, command, the specific var files, and any extra user args
+      ./tf.sh "$ENVIRONMENT" "$COMMAND" "${TF_VAR_FILE_ARGS[@]}" "${TF_ARGS[@]}"
     )
   else
     echo -e "${C_RED}⏩ Skipping. Could not find component or tf.sh script at '$component_path'${C_NC}"

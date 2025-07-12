@@ -27,14 +27,6 @@ show_help() {
 Orchestrates Terraform commands across all components for an entire environment.
 
 Usage: ./scripts/env.sh <environment> <command> [terraform_options]
-
-Arguments:
-  <environment>   The target environment (e.g., "dev", "prod").
-  <command>       The Terraform command to run (e.g., "plan", "apply", "destroy").
-
-Examples:
-  # Plan changes for the entire 'dev' environment
-  ./scripts/env.sh dev plan
 EOF
 }
 
@@ -86,31 +78,33 @@ for component_path in "${COMPONENTS_TO_RUN[@]}"; do
   echo
 
   if [ -d "$component_path" ] && [ -f "$component_path/tf.sh" ]; then
-    # Use a case statement to determine the correct var files for each component
-    vars_for_component=""
+    # --- THIS IS THE CORRECTED LOGIC ---
+    # 1. Get component-specific variables
+    component_specific_vars=""
     case "$component_path" in
       "components/01-network")
-        vars_for_component="network.tfvars"
+        component_specific_vars="network.tfvars"
         ;;
       "components/02-stateful-resources")
-        vars_for_component="stateful-resources.tfvars"
+        component_specific_vars="stateful-resources.tfvars"
         ;;
       "components/03-application")
-        vars_for_component="common.tfvars application.tfvars"
+        # Application needs its own vars and the lambda artifact var from common
+        component_specific_vars="application.tfvars"
         ;;
       "components/04-observability")
-        vars_for_component="observability.tfvars"
+        component_specific_vars="observability.tfvars"
         ;;
     esac
 
-    # Build the -var-file arguments array
+    # 2. Build the full list of arguments for tf.sh
     TF_VAR_FILE_ARGS=()
-    if [ -n "$vars_for_component" ]; then
-      for var_file in $vars_for_component; do
-          # --- THIS LINE IS THE FIX ---
-          # The path must be relative to the component directory where terraform will run.
-          TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/$var_file")
-      done
+    # ALWAYS add common.tfvars first, as it contains project/env/region
+    TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/common.tfvars")
+
+    # Then add the component-specific var file, if it has one
+    if [ -n "$component_specific_vars" ]; then
+      TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/$component_specific_vars")
     fi
 
     (

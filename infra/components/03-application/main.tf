@@ -80,46 +80,36 @@ resource "aws_security_group" "aggregator_lambda_sg" {
 
 resource "aws_lambda_function" "aggregator" {
   function_name = var.lambda_function_name
+  role          = data.terraform_remote_state.stateful.outputs.lambda_iam_role_arn
   handler       = "data_aggregator.app.handler"
-  runtime       = "python3.13"       # or python3.12, 3.11, …
+  runtime       = var.lambda_runtime
   architectures = ["arm64"]
+  timeout       = var.lambda_timeout
+  memory_size   = var.lambda_memory_size
+  s3_bucket     = var.lambda_artifacts_bucket_name
+  s3_key        = var.lambda_s3_key
 
-  s3_bucket = var.lambda_artifacts_bucket_name
-  s3_key    = var.lambda_s3_key
+  ephemeral_storage {
+    size = var.lambda_ephemeral_storage_size
+  }
+
+  vpc_config {
+    subnet_ids         = values(data.terraform_remote_state.network.outputs.private_subnet_ids)
+    security_group_ids = [aws_security_group.aggregator_lambda_sg.id]
+  }
+
+  environment {
+    variables = {
+      ARCHIVE_BUCKET_NAME      = data.terraform_remote_state.stateful.outputs.archive_bucket_id
+      DISTRIBUTION_BUCKET_NAME = data.terraform_remote_state.stateful.outputs.distribution_bucket_id # Added
+      IDEMPOTENCY_TABLE_NAME   = data.terraform_remote_state.stateful.outputs.idempotency_table_name
+      LOG_LEVEL                = "INFO"
+      IDEMPOTENCY_TTL_DAYS     = var.idempotency_ttl_days
+    }
+  }
+
+  tags = local.common_tags
 }
-
-# resource "aws_lambda_function" "aggregator" {
-#   function_name = var.lambda_function_name
-#   role          = data.terraform_remote_state.stateful.outputs.lambda_iam_role_arn
-#   handler       = "app.handler"
-#   runtime       = var.lambda_runtime
-#   architectures = ["arm64"]
-#   timeout       = var.lambda_timeout
-#   memory_size   = var.lambda_memory_size
-#   s3_bucket     = var.lambda_artifacts_bucket_name
-#   s3_key        = var.lambda_s3_key
-#
-#   ephemeral_storage {
-#     size = var.lambda_ephemeral_storage_size
-#   }
-#
-#   vpc_config {
-#     subnet_ids         = values(data.terraform_remote_state.network.outputs.private_subnet_ids)
-#     security_group_ids = [aws_security_group.aggregator_lambda_sg.id]
-#   }
-#
-#   environment {
-#     variables = {
-#       ARCHIVE_BUCKET_NAME      = data.terraform_remote_state.stateful.outputs.archive_bucket_id
-#       DISTRIBUTION_BUCKET_NAME = data.terraform_remote_state.stateful.outputs.distribution_bucket_id # Added
-#       IDEMPOTENCY_TABLE_NAME   = data.terraform_remote_state.stateful.outputs.idempotency_table_name
-#       LOG_LEVEL                = "INFO"
-#       IDEMPOTENCY_TTL_DAYS     = var.idempotency_ttl_days
-#     }
-#   }
-#
-#   tags = local.common_tags
-# }
 
 # -----------------------------------------------------------------------------
 # Section 4: The SQS Trigger

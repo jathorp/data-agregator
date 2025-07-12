@@ -1,3 +1,5 @@
+# components/02-stateful-resources/main.tf – **KMS-free** version
+
 locals {
   common_tags = {
     Project     = var.project_name
@@ -10,9 +12,9 @@ resource "random_id" "suffix" {
   byte_length = 4
 }
 
-# ─────────────────────────────────────────────────────────────
-# Lambda Execution Role (policies added in component 03)
-# ─────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# Lambda execution role (shell only – component 03 will attach policies)
+# ────────────────────────────────────────────────────────────────────────────────
 resource "aws_iam_role" "lambda_exec_role" {
   name = var.lambda_role_name
   tags = local.common_tags
@@ -27,22 +29,13 @@ resource "aws_iam_role" "lambda_exec_role" {
   })
 }
 
-# ─────────────────────────────────────────────────────────────
-# Access Logs Bucket
-# ─────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# S3 Buckets
+# ────────────────────────────────────────────────────────────────────────────────
 resource "aws_s3_bucket" "access_logs" {
   bucket        = "${var.project_name}-access-logs-${random_id.suffix.hex}"
   force_destroy = true
   tags          = merge(local.common_tags, { Purpose = "S3 Access Logs" })
-
-  # REFACTORED: Lifecycle rule moved inside the bucket resource
-  lifecycle_rule {
-    id      = "expire-logs-after-90-days"
-    enabled = true
-    expiration {
-      days = 90
-    }
-  }
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "access_logs" {
@@ -60,24 +53,20 @@ resource "aws_s3_bucket_public_access_block" "access_logs" {
   restrict_public_buckets = true
 }
 
-# ─────────────────────────────────────────────────────────────
-# Landing Bucket
-# ─────────────────────────────────────────────────────────────
+resource "aws_s3_bucket_lifecycle_configuration" "access_logs" {
+  bucket = aws_s3_bucket.access_logs.id
+  rule {
+    id     = "expire-logs-after-90-days"
+    status = "Enabled"
+    filter {}
+    expiration { days = 90 }
+  }
+}
+
+# Landing bucket
 resource "aws_s3_bucket" "landing" {
   bucket = "${var.landing_bucket_name}-${random_id.suffix.hex}"
   tags   = merge(local.common_tags, { Name = var.landing_bucket_name })
-
-  # REFACTORED: Lifecycle rule moved inside the bucket resource
-  lifecycle_rule {
-    id      = "expire-and-cleanup"
-    enabled = true
-    expiration {
-      days = 7
-    }
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 1
-    }
-  }
 }
 
 resource "aws_s3_bucket_logging" "landing" {
@@ -106,36 +95,27 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "landing" {
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "landing" {
+  bucket = aws_s3_bucket.landing.id
+  rule {
+    id     = "expire-and-cleanup"
+    status = "Enabled"
+    filter {}
+    expiration { days = 7 }
+    abort_incomplete_multipart_upload { days_after_initiation = 1 }
+  }
+}
+
 resource "aws_s3_bucket_policy" "landing" {
   bucket = aws_s3_bucket.landing.id
   policy = data.aws_iam_policy_document.enforce_tls_landing.json
 }
 
-# ─────────────────────────────────────────────────────────────
-# Archive Bucket
-# ─────────────────────────────────────────────────────────────
+# Archive bucket
 resource "aws_s3_bucket" "archive" {
-  bucket    = "${var.archive_bucket_name}-${random_id.suffix.hex}"
-  tags      = merge(local.common_tags, { Name = var.archive_bucket_name })
-
-  # CORRECTED: Conditional lifecycle.prevent_destroy
-  lifecycle { prevent_destroy = var.environment_name == "prod" }
-
-  # REFACTORED: Lifecycle rule moved inside the bucket resource
-  lifecycle_rule {
-    id      = "archive-to-deep-archive-and-cleanup"
-    enabled = true
-    transition {
-      days          = 30
-      storage_class = "DEEP_ARCHIVE"
-    }
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 7
-    }
-    expiration {
-      expired_object_delete_marker = true
-    }
-  }
+  bucket = "${var.archive_bucket_name}-${random_id.suffix.hex}"
+  lifecycle { prevent_destroy = true }
+  tags = merge(local.common_tags, { Name = var.archive_bucket_name })
 }
 
 resource "aws_s3_bucket_logging" "archive" {
@@ -164,29 +144,31 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "archive" {
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "archive" {
+  bucket = aws_s3_bucket.archive.id
+  rule {
+    id     = "archive-to-deep-archive-and-cleanup"
+    status = "Enabled"
+    filter {}
+    transition {
+      days          = 30
+      storage_class = "DEEP_ARCHIVE"
+    }
+    abort_incomplete_multipart_upload { days_after_initiation = 7 }
+    expiration { expired_object_delete_marker = true }
+  }
+}
+
 resource "aws_s3_bucket_policy" "archive" {
   bucket = aws_s3_bucket.archive.id
   policy = data.aws_iam_policy_document.enforce_tls_archive.json
 }
 
-# ─────────────────────────────────────────────────────────────
-# Distribution Bucket (pull by on-prem consumer)
-# ─────────────────────────────────────────────────────────────
+# --- Distribution Bucket ---
+# This new bucket is the "mailbox" for the on-premise service to pull from.
 resource "aws_s3_bucket" "distribution" {
   bucket = "${var.distribution_bucket_name}-${random_id.suffix.hex}"
   tags   = merge(local.common_tags, { Name = var.distribution_bucket_name })
-
-  # REFACTORED: Lifecycle rule moved inside the bucket resource
-  lifecycle_rule {
-    id      = "expire-unprocessed-files"
-    enabled = true
-    expiration {
-      days = 14
-    }
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 1
-    }
-  }
 }
 
 resource "aws_s3_bucket_logging" "distribution" {
@@ -210,16 +192,25 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "distribution" {
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "distribution" {
+  bucket = aws_s3_bucket.distribution.id
+  rule {
+    id     = "expire-unprocessed-files"
+    status = "Enabled"
+    filter {}
+    expiration { days = 14 }
+    abort_incomplete_multipart_upload { days_after_initiation = 1 }
+  }
+}
+
 resource "aws_s3_bucket_policy" "distribution" {
   bucket = aws_s3_bucket.distribution.id
   policy = data.aws_iam_policy_document.enforce_tls_distribution.json
 }
 
-# [REMOVED] All separate aws_s3_bucket_lifecycle_configuration resources have been deleted.
-
-# ─────────────────────────────────────────────────────────────
-# SQS Queues (with redrive to DLQ)
-# ─────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# SQS – uses AWS-managed encryption (`alias/aws/sqs`)
+# ────────────────────────────────────────────────────────────────────────────────
 resource "aws_sqs_queue" "dlq" {
   name                    = var.dlq_name
   sqs_managed_sse_enabled = true
@@ -231,17 +222,15 @@ resource "aws_sqs_queue" "main" {
   message_retention_seconds  = 345600
   visibility_timeout_seconds = 90
   sqs_managed_sse_enabled    = true
-
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.dlq.arn,
     maxReceiveCount     = 5
   })
-
   tags = merge(local.common_tags, { Name = var.main_queue_name })
 }
 
 resource "aws_sqs_queue_policy" "s3_to_sqs" {
-  queue_url = aws_s3_queue.main.id
+  queue_url = aws_sqs_queue.main.id
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
@@ -260,18 +249,16 @@ resource "aws_sqs_queue_policy" "s3_to_sqs" {
 
 resource "aws_s3_bucket_notification" "landing_to_sqs" {
   bucket = aws_s3_bucket.landing.id
-
   queue {
     queue_arn = aws_sqs_queue.main.arn
     events    = ["s3:ObjectCreated:*"]
   }
-
   depends_on = [aws_sqs_queue_policy.s3_to_sqs]
 }
 
-# ─────────────────────────────────────────────────────────────
-# DynamoDB Table for Idempotency
-# ─────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# DynamoDB – encrypted with AWS-owned keys (default)
+# ────────────────────────────────────────────────────────────────────────────────
 resource "aws_dynamodb_table" "idempotency" {
   name         = var.idempotency_table_name
   billing_mode = "PAY_PER_REQUEST"
@@ -286,12 +273,10 @@ resource "aws_dynamodb_table" "idempotency" {
     attribute_name = "ttl"
     enabled        = true
   }
-
   point_in_time_recovery { enabled = true }
 
-  server_side_encryption { enabled = true }
+  server_side_encryption { enabled = true } # AWS-managed key
 
   tags = merge(local.common_tags, { Name = var.idempotency_table_name })
-
-  lifecycle { prevent_destroy = var.environment_name == "prod" }
+  lifecycle { prevent_destroy = true }
 }

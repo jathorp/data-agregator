@@ -81,7 +81,7 @@ resource "aws_security_group" "aggregator_lambda_sg" {
 resource "aws_lambda_function" "aggregator" {
   function_name = var.lambda_function_name
   role          = data.terraform_remote_state.stateful.outputs.lambda_iam_role_arn
-  handler       = var.lambda_handler
+  handler       = "data_aggregator.app.handler"
   runtime       = var.lambda_runtime
   architectures = ["arm64"]
   timeout       = var.lambda_timeout

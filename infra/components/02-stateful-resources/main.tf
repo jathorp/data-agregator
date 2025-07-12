@@ -1,5 +1,3 @@
-# components/02-stateful-resources/main.tf – **KMS-free** version
-
 locals {
   common_tags = {
     Project     = var.project_name
@@ -12,9 +10,9 @@ resource "random_id" "suffix" {
   byte_length = 4
 }
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Lambda execution role (shell only – component 03 will attach policies)
-# ────────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# Lambda Execution Role (policies added in component 03)
+# ─────────────────────────────────────────────────────────────
 resource "aws_iam_role" "lambda_exec_role" {
   name = var.lambda_role_name
   tags = local.common_tags
@@ -29,9 +27,9 @@ resource "aws_iam_role" "lambda_exec_role" {
   })
 }
 
-# ────────────────────────────────────────────────────────────────────────────────
-# S3 Buckets
-# ────────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# Access Logs Bucket
+# ─────────────────────────────────────────────────────────────
 resource "aws_s3_bucket" "access_logs" {
   bucket        = "${var.project_name}-access-logs-${random_id.suffix.hex}"
   force_destroy = true
@@ -63,7 +61,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "access_logs" {
   }
 }
 
-# Landing bucket
+# ─────────────────────────────────────────────────────────────
+# Landing Bucket
+# ─────────────────────────────────────────────────────────────
 resource "aws_s3_bucket" "landing" {
   bucket = "${var.landing_bucket_name}-${random_id.suffix.hex}"
   tags   = merge(local.common_tags, { Name = var.landing_bucket_name })
@@ -95,35 +95,25 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "landing" {
   }
 }
 
-resource "aws_s3_bucket" "landing" {
-  bucket = "my-landing-bucket"
-
-  tags = {
-    Name = "my-landing-bucket"
-  }
-}
-
 resource "aws_s3_bucket_lifecycle_configuration" "landing" {
   bucket = aws_s3_bucket.landing.id
-
   rule {
     id     = "expire-and-cleanup"
     status = "Enabled"
-
-    filter {} # applies to all objects
-
-    expiration {
-      days = 7
-    }
-
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 1
-    }
+    filter {}
+    expiration { days = 7 }
+    abort_incomplete_multipart_upload { days_after_initiation = 1 }
   }
 }
 
+resource "aws_s3_bucket_policy" "landing" {
+  bucket = aws_s3_bucket.landing.id
+  policy = data.aws_iam_policy_document.enforce_tls_landing.json
+}
 
-# Archive bucket
+# ─────────────────────────────────────────────────────────────
+# Archive Bucket
+# ─────────────────────────────────────────────────────────────
 resource "aws_s3_bucket" "archive" {
   bucket = "${var.archive_bucket_name}-${random_id.suffix.hex}"
   lifecycle { prevent_destroy = true }
@@ -162,12 +152,17 @@ resource "aws_s3_bucket_lifecycle_configuration" "archive" {
     id     = "archive-to-deep-archive-and-cleanup"
     status = "Enabled"
     filter {}
+
     transition {
       days          = 30
       storage_class = "DEEP_ARCHIVE"
     }
+
     abort_incomplete_multipart_upload { days_after_initiation = 7 }
-    expiration { expired_object_delete_marker = true }
+
+    expiration {
+      expired_object_delete_marker = true
+    }
   }
 }
 
@@ -176,8 +171,9 @@ resource "aws_s3_bucket_policy" "archive" {
   policy = data.aws_iam_policy_document.enforce_tls_archive.json
 }
 
-# --- Distribution Bucket ---
-# This new bucket is the "mailbox" for the on-premise service to pull from.
+# ─────────────────────────────────────────────────────────────
+# Distribution Bucket (pull by on-prem consumer)
+# ─────────────────────────────────────────────────────────────
 resource "aws_s3_bucket" "distribution" {
   bucket = "${var.distribution_bucket_name}-${random_id.suffix.hex}"
   tags   = merge(local.common_tags, { Name = var.distribution_bucket_name })
@@ -220,9 +216,9 @@ resource "aws_s3_bucket_policy" "distribution" {
   policy = data.aws_iam_policy_document.enforce_tls_distribution.json
 }
 
-# ────────────────────────────────────────────────────────────────────────────────
-# SQS – uses AWS-managed encryption (`alias/aws/sqs`)
-# ────────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# SQS Queues (with redrive to DLQ)
+# ─────────────────────────────────────────────────────────────
 resource "aws_sqs_queue" "dlq" {
   name                    = var.dlq_name
   sqs_managed_sse_enabled = true
@@ -234,10 +230,12 @@ resource "aws_sqs_queue" "main" {
   message_retention_seconds  = 345600
   visibility_timeout_seconds = 90
   sqs_managed_sse_enabled    = true
+
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.dlq.arn,
     maxReceiveCount     = 5
   })
+
   tags = merge(local.common_tags, { Name = var.main_queue_name })
 }
 
@@ -261,16 +259,18 @@ resource "aws_sqs_queue_policy" "s3_to_sqs" {
 
 resource "aws_s3_bucket_notification" "landing_to_sqs" {
   bucket = aws_s3_bucket.landing.id
+
   queue {
     queue_arn = aws_sqs_queue.main.arn
     events    = ["s3:ObjectCreated:*"]
   }
+
   depends_on = [aws_sqs_queue_policy.s3_to_sqs]
 }
 
-# ────────────────────────────────────────────────────────────────────────────────
-# DynamoDB – encrypted with AWS-owned keys (default)
-# ────────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# DynamoDB Table for Idempotency
+# ─────────────────────────────────────────────────────────────
 resource "aws_dynamodb_table" "idempotency" {
   name         = var.idempotency_table_name
   billing_mode = "PAY_PER_REQUEST"
@@ -285,10 +285,12 @@ resource "aws_dynamodb_table" "idempotency" {
     attribute_name = "ttl"
     enabled        = true
   }
+
   point_in_time_recovery { enabled = true }
 
   server_side_encryption { enabled = true } # AWS-managed key
 
   tags = merge(local.common_tags, { Name = var.idempotency_table_name })
+
   lifecycle { prevent_destroy = true }
 }

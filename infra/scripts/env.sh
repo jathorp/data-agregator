@@ -46,9 +46,8 @@ if [ -z "$ENVIRONMENT" ] || [ -z "$COMMAND" ]; then
 fi
 
 # --- Main Logic ---
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
-PROJECT_ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
-cd "$PROJECT_ROOT_DIR"
+# Resolve the project root directory. This script should be run from there.
+PROJECT_ROOT_DIR=$(pwd)
 
 # --- Destroy Logic ---
 if [ "$COMMAND" == "destroy" ]; then
@@ -77,30 +76,28 @@ for component_path in "${COMPONENTS_TO_RUN[@]}"; do
   echo
 
   if [ -d "$component_path" ] && [ -f "$component_path/tf.sh" ]; then
-    # --- THIS IS THE FINAL CORRECTED LOGIC ---
-    # 1. Start with the common variables that all components need.
-    TF_VAR_FILE_ARGS=("-var-file=environments/$ENVIRONMENT/common.tfvars")
+    # --- THIS IS THE CORRECTED LOGIC ---
+    # The paths must be relative to the component directory where terraform will run.
+    TF_VAR_FILE_ARGS=("-var-file=../../environments/$ENVIRONMENT/common.tfvars")
 
-    # 2. Add component-specific var files using a case statement.
     case "$component_path" in
       "components/01-network")
-        TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/network.tfvars")
+        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/network.tfvars")
         ;;
       "components/02-stateful-resources")
-        TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/stateful-resources.tfvars")
-        # Add the observability vars file because it contains the remote_state_bucket name
-        TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/observability.tfvars")
+        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/stateful-resources.tfvars")
+        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/observability.tfvars")
         ;;
       "components/03-application")
-        TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/application.tfvars")
-        # Also needs remote state info
-        TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/observability.tfvars")
+        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/application.tfvars")
+        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/observability.tfvars")
         ;;
       "components/04-observability")
-        TF_VAR_FILE_ARGS+=("-var-file=environments/$ENVIRONMENT/observability.tfvars")
+        TF_VAR_FILE_ARGS+=("-var-file=../../environments/$ENVIRONMENT/observability.tfvars")
         ;;
     esac
 
+    # Use a subshell to avoid polluting the main script's directory
     (
       cd "$component_path"
       ./tf.sh "$ENVIRONMENT" "$COMMAND" "${TF_VAR_FILE_ARGS[@]}" "${TF_ARGS[@]}"

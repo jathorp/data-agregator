@@ -5,11 +5,22 @@ cd "$(dirname "$0")"
 rm -rf build dist
 mkdir -p build dist
 
-echo "🔹 Installing aws-lambda-powertools..."
-uv pip install --upgrade --no-compile --target build aws-lambda-powertools[tracer]
+echo "🔹 Installing runtime dependencies with uv…"
+uv pip install --target build \
+  --python-platform "manylinux2014_aarch64" \
+  --python "3.13" \
+  --no-compile-bytecode \
+  --no-installer-metadata \
+  'aws-lambda-powertools[tracer]' \
+  # add any other deps here, e.g. 'cryptography>=42.0.0'
 
-echo "🔹 Copying package..."
+echo "🔹 Copying application package…"
 cp -R src/data_aggregator build/
 
-(cd build && zip -qr ../dist/lambda.zip .)
-echo "✅ ZIP ready: $(pwd)/dist/lambda.zip"
+# Strip __pycache__ to shrink size
+find build -name '__pycache__' -type d -exec rm -rf {} +
+
+echo "🔹 Creating ZIP…"
+( cd build && zip -qr ../dist/lambda.zip . )
+
+echo "✅ Lambda artefact ready: $(pwd)/dist/lambda.zip"

@@ -56,24 +56,35 @@ class Dependencies:
             ttl_attribute=self.dynamodb_ttl_attribute,
         )
 
+
 def make_record_handler(dependencies: Dependencies):
     """Factory producing a per-invocation record handler."""
+
     def record_handler(record: SQSRecord) -> S3EventRecord:
         try:
             s3_event_body = json.loads(record.body)
             s3_record = cast(S3EventRecord, s3_event_body["Records"][0])
             object_key = s3_record["s3"]["object"]["key"]
+            logger.info(f"Processing object key: {object_key}")  # <-- ADDED
         except (json.JSONDecodeError, KeyError, IndexError) as exc:
             logger.warning("Malformed SQS message.", extra={"record": record.body})
             raise ValueError("Malformed SQS message body") from exc
 
         expiry_ts = int(time.time()) + dependencies.idempotency_ttl_seconds
-        if dependencies.dynamodb_client.check_and_set_idempotency(object_key, expiry_ts):
-            logger.info("New object key detected, adding to batch.", extra={"key": object_key})
+
+        # --- VERBOSE DEBUG BLOCK ---
+        logger.info("About to perform idempotency check in DynamoDB.")
+        is_new_key = dependencies.dynamodb_client.check_and_set_idempotency(object_key, expiry_ts)
+        logger.info(f"Idempotency check returned: '{is_new_key}'")  # <-- MOST IMPORTANT NEW LOG
+        # ---------------------------
+
+        if is_new_key:
+            logger.info("Key is new. Adding to batch for processing.")  # <-- ADDED
             return s3_record
 
-        logger.warning("Duplicate object key detected, skipping.", extra={"key": object_key})
-        return {} # empty dict is ignored by BatchProcessor
+        logger.warning("Key is a duplicate. Skipping.")  # <-- ADDED
+        return {}  # empty dict is ignored by BatchProcessor
+
     return record_handler
 
 # MODIFIED: This function is now much simpler
@@ -115,9 +126,13 @@ def handler(
     event: Dict[str, Any], context: LambdaContext
 ) -> PartialItemFailureResponse:
     # Guard against invalid event data
+    logger.info("About to perform start.")
+
     if "Records" not in event:
         logger.warning("Event has no 'Records' key – ignoring", extra={"event": event})
         return {"batchItemFailures": []}
+
+    logger.info("About to RUN.")
 
     deps = Dependencies()
     with processor(records=event["Records"], handler=make_record_handler(deps)):

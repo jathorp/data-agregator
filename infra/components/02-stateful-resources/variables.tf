@@ -22,12 +22,12 @@ variable "remote_state_bucket" {
 
 # --- S3 Variables ---
 variable "landing_bucket_name" {
-  description = "The base name for the S3 landing bucket. A random suffix will be added."
+  description = "The base name for the S3 landing bucket."
   type        = string
 }
 
 variable "archive_bucket_name" {
-  description = "The base name for the S3 archive bucket. A random suffix will be added."
+  description = "The base name for the S3 archive bucket."
   type        = string
 }
 

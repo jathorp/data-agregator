@@ -138,7 +138,7 @@ def handler(
 
     deps = Dependencies()
     with processor(records=event["Records"], handler=make_record_handler(deps)):
-        pass
+        processor.process()
 
     logger.info("Just done with statement.")
 

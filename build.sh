@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -6,12 +7,13 @@ rm -rf build dist
 mkdir -p build dist
 
 echo "🔹 Installing runtime dependencies with uv…"
-uv pip install --target build \
-  --python-platform "manylinux2014_aarch64" \
+uv pip install \
+  --target build \
   --python "3.13" \
+  --python-platform "aarch64-manylinux2014" \
   --no-compile-bytecode \
   --no-installer-metadata \
-  'aws-lambda-powertools[tracer]' \
+  'aws-lambda-powertools[tracer]'
   # add any other deps here, e.g. 'cryptography>=42.0.0'
 
 echo "🔹 Copying application package…"

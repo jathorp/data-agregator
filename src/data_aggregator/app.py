@@ -114,6 +114,11 @@ def _process_successful_batch(
 def handler(
     event: Dict[str, Any], context: LambdaContext
 ) -> PartialItemFailureResponse:
+    # Guard against invalid event data
+    if "Records" not in event:
+        logger.warning("Event has no 'Records' key – ignoring", extra={"event": event})
+        return {"batchItemFailures": []}
+
     deps = Dependencies()
     with processor(records=event["Records"], handler=make_record_handler(deps)):
         pass

@@ -6,7 +6,7 @@ rm -rf build dist
 mkdir -p build dist
 
 echo "🔹 Installing aws-lambda-powertools..."
-uv pip install --upgrade --no-compile --target build aws-lambda-powertools
+uv pip install --upgrade --no-compile --target build aws-lambda-powertools[tracer]
 
 echo "🔹 Copying package..."
 cp -R src/data_aggregator build/

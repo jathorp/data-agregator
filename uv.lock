@@ -234,7 +234,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "aws-xray-sdk" },
     { name = "boto3-stubs", extra = ["dynamodb", "s3", "secretsmanager", "sqs"] },
     { name = "mocker" },
     { name = "moto" },
@@ -252,7 +251,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "aws-xray-sdk", specifier = ">=2.14.0" },
     { name = "boto3-stubs", extras = ["dynamodb", "s3", "secretsmanager", "sqs"], specifier = ">=1.39.1" },
     { name = "mocker", specifier = ">=1.1.1" },
     { name = "moto", specifier = ">=5.1.6" },

@@ -138,6 +138,8 @@ def handler(
     with processor(records=event["Records"], handler=make_record_handler(deps)):
         pass
 
+    logger.info("Just done with statement.")
+
     batch_item_failures: List[PartialItemFailures] = processor.response()["batchItemFailures"]
     successful_records = [rec for rec in processor.success_messages if rec.result]
 

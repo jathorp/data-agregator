@@ -61,6 +61,8 @@ def make_record_handler(dependencies: Dependencies):
     """Factory producing a per-invocation record handler."""
 
     def record_handler(record: SQSRecord) -> S3EventRecord:
+        logger.info("111: CALLED.")  # <-- ADDED
+
         try:
             s3_event_body = json.loads(record.body)
             s3_record = cast(S3EventRecord, s3_event_body["Records"][0])

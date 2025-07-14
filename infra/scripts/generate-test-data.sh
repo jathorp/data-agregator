@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# generate-test-data.sh ‒ v3
+# generate-test-data.sh ‒ v3.1
 #
 # Generates synthetic files and uploads them to an S3 bucket for pipeline
 # testing.  Supports parallel uploads, random (incompressible) or zero-filled
@@ -21,11 +21,17 @@ NUM_FILES=1
 FILE_SIZE_MB=""
 S3_BUCKET=""
 S3_PREFIX=""
-CONCURRENCY=1          # ≥1
-SSE=""                 # e.g. AES256 | aws:kms
+CONCURRENCY=1
+SSE=""
 KEEP_LOCAL=false
 DRY_RUN=false
 USE_RANDOM_DATA=false
+
+# Check for gdate on macOS for nanosecond support
+DATE_CMD="date"
+if [[ "$(uname)" == "Darwin" ]] && command -v gdate >/dev/null; then
+  DATE_CMD="gdate"
+fi
 
 # ---------- Usage -------------------------------------------------------------
 usage() {
@@ -39,16 +45,12 @@ Required:
 Optional:
   -n, --num           Number of files to generate      (default: 1)
   -p, --prefix        S3 object prefix (folder)        (default: "")
-  -c, --concurrency   Parallel uploads                 (default: 1, ≥1)
+  -c, --concurrency   Parallel uploads                 (default: 1, >=1)
   --sse <alg>         Server-side encryption alg       (AES256 | aws:kms)
   --random            Use incompressible random data   (slower)
   --keep              Retain local files after upload
   --dry-run           Print actions without executing
   -h, --help          Show this help
-
-Examples:
-  $SCRIPT_NAME -b my-bucket -s 10 -n 100 -p load/ -c 4
-  $SCRIPT_NAME --bucket my-bucket --size 200 --sse AES256 --random
 EOF
   exit 1
 }
@@ -77,22 +79,23 @@ done
 [[ $NUM_FILES =~ ^[0-9]+$ && $FILE_SIZE_MB =~ ^[0-9]+$ && $CONCURRENCY =~ ^[0-9]+$ ]] || {
   echo "Error: numeric arguments required for -n, -s, -c." >&2; exit 1; }
 
-(( CONCURRENCY > 0 )) || { echo "Error: --concurrency must be ≥1." >&2; exit 1; }
+(( CONCURRENCY > 0 && FILE_SIZE_MB > 0 )) || {
+  echo "Error: --concurrency and --size must be > 0." >&2; exit 1; }
 
 command -v aws >/dev/null 2>&1 || { echo "aws CLI not found." >&2; exit 1; }
 
 # ---------- Cleanup traps -----------------------------------------------------
 cleanup() {
+  echo -e "\nCleaning up temp directory..."
   $KEEP_LOCAL || rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT TERM
-trap 'cleanup; kill 0' INT        # Ensure subshells die on Ctrl-C
+trap 'echo -e "\nCtrl-C detected. Cleaning up and exiting..."; cleanup; kill 0' INT
 
 # ---------- Worker functions --------------------------------------------------
 make_file() {
-  # Creates a file and echoes its path
   local idx=$1
-  local fname="${TMP_DIR}/test-$(date +%s%N)-${idx}.bin"
+  local fname="${TMP_DIR}/test-$(${DATE_CMD} +%s%N)-${idx}.bin"
 
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "[DRY] would create $fname"
@@ -100,22 +103,30 @@ make_file() {
     return
   fi
 
-  echo "[${idx}] Generating ${FILE_SIZE_MB}MB ${USE_RANDOM_DATA:+random }file…"
-
+  local data_source="zeros"
   if [[ "$USE_RANDOM_DATA" == "true" ]]; then
-    # Incompressible data
-    command -v dd >/dev/null 2>&1 || { echo "dd not found." >&2; exit 1; }
+    data_source="random data"
+  fi
+  echo "[${idx}] Generating ${FILE_SIZE_MB}MB file with ${data_source}…"
+
+  # --- ROBUST FILE CREATION BLOCK ---
+  if [[ "$USE_RANDOM_DATA" == "true" ]]; then
+    # For random data, dd is the only option
     dd if=/dev/urandom of="$fname" bs=1M count="$FILE_SIZE_MB" status=none
   else
-    # Fast zero fill (sparse when possible)
-    if command -v fallocate >/dev/null 2>&1; then
-      fallocate -l "${FILE_SIZE_MB}M" "$fname"
-    elif command -v mkfile >/dev/null 2>&1; then
-      mkfile -n "${FILE_SIZE_MB}m" "$fname"  # '-n' => sparse on macOS
+    # For zero-filled data, try fast methods first and fall back to dd
+    if command -v fallocate >/dev/null && fallocate -l "${FILE_SIZE_MB}M" "$fname" 2>/dev/null; then
+      : # Success with fallocate (Linux)
+    elif command -v mkfile >/dev/null && mkfile -n "${FILE_SIZE_MB}m" "$fname" 2>/dev/null; then
+      : # Success with mkfile (macOS)
     else
+      # Fallback to dd if fast methods are unavailable or fail
+      echo "[${idx}] ... fast creation failed, using dd fallback."
       dd if=/dev/zero of="$fname" bs=1M count="$FILE_SIZE_MB" status=none
     fi
   fi
+  # --- END ROBUST FILE CREATION BLOCK ---
+
   echo "$fname"
 }
 
@@ -143,18 +154,22 @@ process_item() {
 }
 
 export -f make_file upload_file process_item
-export FILE_SIZE_MB S3_BUCKET S3_PREFIX SSE DRY_RUN KEEP_LOCAL USE_RANDOM_DATA
+export FILE_SIZE_MB S3_BUCKET S3_PREFIX SSE DRY_RUN KEEP_LOCAL USE_RANDOM_DATA DATE_CMD
 
 # ---------- Main --------------------------------------------------------------
 data_kind=$([[ "$USE_RANDOM_DATA" == "true" ]] && echo "incompressible (random)" || echo "compressible (zeros)")
 echo "### Test-data generator"
 echo "Files     : $NUM_FILES × ${FILE_SIZE_MB} MB  ($data_kind)"
-echo "Bucket    : s3://$S3_BUCKET/$S3_PREFIX"
-echo "Concurrency: $CONCURRENCY | SSE: ${SSE:-none} | KEEP_LOCAL: $KEEP_LOCAL | DRY_RUN: $DRY_RUN"
-echo "Temp dir  : $TMP_DIR"
+echo "Bucket    : s3://\"$S3_BUCKET\"/\"$S3_PREFIX\""
+echo "Concurrency: \"$CONCURRENCY\" | SSE: \"${SSE:-none}\" | KEEP_LOCAL: \"$KEEP_LOCAL\" | DRY_RUN: \"$DRY_RUN\""
+echo "Temp dir  : \"$TMP_DIR\""
 echo "-----------------------------------------------------------------"
 
-seq 1 "$NUM_FILES" | xargs -I{} -P "$CONCURRENCY" bash -c 'process_item "{}"'
+seq 1 "$NUM_FILES" | xargs -n 10 -P "$CONCURRENCY" bash -c '
+  for i in "$@"; do
+    process_item "$i"
+  done
+' _
 
 END_TIME=$(date +%s)
 TOTAL_MB=$(( NUM_FILES * FILE_SIZE_MB ))

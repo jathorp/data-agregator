@@ -265,18 +265,27 @@ def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailure
         processor.process()
 
     batch_failures: List[PartialItemFailures] = processor.response()["batchItemFailures"]
-    successful_records = [r for r in processor.success_messages if r]
-    logger.debug("Record-level processing complete",
-                 extra={"success_count": len(successful_records), "failure_count": len(batch_failures)})
+
+    # The .result attribute holds the return value from our record_handler.
+    # Also, filter out any None/empty results, which represent duplicates.
+    successful_records = [rec.result for rec in processor.success_messages if rec.result]
+
+    logger.debug(
+        "Record-level processing complete",
+        extra={"success_count": len(successful_records), "failure_count": len(batch_failures)},
+    )
 
     if successful_records:
         try:
+            # Pass the clean list of S3EventRecord dictionaries to the next function.
             _process_successful_batch(successful_records, context, deps)
         except SQSBatchProcessingError:
             logger.error("Stage-2 bundling failed for a retryable reason. Returning successful items for retry.",
                          exc_info=True)
+            # This logic also needs to be updated to reference the message objects.
             for rec in processor.success_messages:
-                batch_failures.append({"itemIdentifier": rec["messageId"]})
+                if rec.result:  # Only retry records that were actually successful in stage 1
+                    batch_failures.append({"itemIdentifier": rec.message_id})
 
     if not successful_records and not batch_failures:
         logger.info("All records in batch were duplicates, no new work performed.")

@@ -73,6 +73,10 @@ resource "aws_security_group" "aggregator_lambda_sg" {
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
   tags        = local.common_tags
 
+  # This prevents a race condition where the security group is destroyed
+  # before the Lambda's network interfaces (ENIs) are detached.
+  depends_on = [aws_lambda_event_source_mapping.sqs_trigger]
+
   # Egress rules based on the Principle of Least Privilege.
 
   egress {

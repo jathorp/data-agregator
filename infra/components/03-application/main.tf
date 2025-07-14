@@ -1,6 +1,5 @@
 # infra/components/03-application/main.tf
 
-
 locals {
   common_tags = {
     Project     = var.project_name
@@ -31,25 +30,26 @@ resource "aws_iam_policy" "aggregator_lambda_policy" {
         Resource = data.terraform_remote_state.stateful.outputs.main_queue_arn
       },
       {
+        # FIX: Allow GetObject from landing (for input) and archive (for copy source)
         Action   = "s3:GetObject"
         Effect   = "Allow"
         Resource = [
-          "${data.terraform_remote_state.stateful.outputs.archive_bucket_arn}/*",
-          "${data.terraform_remote_state.stateful.outputs.distribution_bucket_arn}/*" # Added permission
+          "${data.terraform_remote_state.stateful.outputs.landing_bucket_arn}/*",
+          "${data.terraform_remote_state.stateful.outputs.archive_bucket_arn}/*"
         ]
       },
       {
-        Action = ["s3:PutObject"]
-        Effect = "Allow"
+        Action   = "s3:PutObject"
+        Effect   = "Allow"
         Resource = [
           "${data.terraform_remote_state.stateful.outputs.archive_bucket_arn}/*",
-          "${data.terraform_remote_state.stateful.outputs.distribution_bucket_arn}/*" # Added permission
+          "${data.terraform_remote_state.stateful.outputs.distribution_bucket_arn}/*"
         ]
       },
       {
         Action   = ["dynamodb:GetItem", "dynamodb:PutItem"]
         Effect   = "Allow"
-        Resource = data.terraform_remote_state.stateful.outputs.idempotency_table_arn # Simplified
+        Resource = data.terraform_remote_state.stateful.outputs.idempotency_table_arn
       },
       {
         Action   = ["ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DeleteNetworkInterface"]
@@ -71,17 +71,13 @@ resource "aws_iam_role_policy_attachment" "aggregator_lambda_attach" {
 # -----------------------------------------------------------------------------
 
 resource "aws_security_group" "aggregator_lambda_sg" {
-  name        = "${var.lambda_function_name}-sg"
+  # FIX: Decouple the SG name from the function name to break the dependency cycle.
+  name        = "${var.project_name}-${var.environment_name}-aggregator-sg"
   description = "Allows Lambda outbound access to required AWS service endpoints."
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
   tags        = local.common_tags
 
-  # This prevents a race condition where the security group is destroyed
-  # before the Lambda's network interfaces (ENIs) are detached.
-  depends_on = [aws_lambda_event_source_mapping.sqs_trigger]
-
   # Egress rules based on the Principle of Least Privilege.
-
   egress {
     from_port       = 443
     to_port         = 443
@@ -134,7 +130,7 @@ resource "aws_lambda_function" "aggregator" {
   environment {
     variables = {
       ARCHIVE_BUCKET_NAME      = data.terraform_remote_state.stateful.outputs.archive_bucket_id
-      DISTRIBUTION_BUCKET_NAME = data.terraform_remote_state.stateful.outputs.distribution_bucket_id # Added
+      DISTRIBUTION_BUCKET_NAME = data.terraform_remote_state.stateful.outputs.distribution_bucket_id
       IDEMPOTENCY_TABLE_NAME   = data.terraform_remote_state.stateful.outputs.idempotency_table_name
       LOG_LEVEL                = "DEBUG"
       IDEMPOTENCY_TTL_DAYS     = var.idempotency_ttl_days
@@ -142,6 +138,11 @@ resource "aws_lambda_function" "aggregator" {
   }
 
   tags = local.common_tags
+
+  # FIX: Add a delete timeout to solve the ENI deletion race condition.
+  timeouts {
+    delete = "15m"
+  }
 }
 
 # -----------------------------------------------------------------------------

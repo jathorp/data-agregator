@@ -1,6 +1,6 @@
 # tests/unit/test_clients.py
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 from botocore.exceptions import ClientError
@@ -18,8 +18,13 @@ def mock_boto_s3_client():
 
 @pytest.fixture
 def s3_client(mock_boto_s3_client):
-    """Yields an instance of our S3Client wrapper."""
+    """Yields an instance of our S3Client wrapper without KMS."""
     return S3Client(s3_client=mock_boto_s3_client)
+
+@pytest.fixture
+def s3_client_with_kms(mock_boto_s3_client):
+    """Yields an instance of our S3Client wrapper with KMS enabled."""
+    return S3Client(s3_client=mock_boto_s3_client, kms_key_id="test-kms-key")
 
 @pytest.fixture
 def mock_boto_dynamodb_client():
@@ -70,11 +75,65 @@ def test_s3_client_upload_gzipped_bundle(s3_client, mock_boto_s3_client):
     )
 
     # Assert
+    # --- FIX: Assert the complete set of ExtraArgs ---
+    expected_extra_args = {
+        "Metadata": {"content-sha256": test_hash},
+        "ContentEncoding": "gzip",
+        "ContentType": "application/gzip",
+    }
     mock_boto_s3_client.upload_fileobj.assert_called_once_with(
         Fileobj=mock_file,
         Bucket="test-bucket",
         Key="test-key",
-        ExtraArgs={"Metadata": {"content-sha256": test_hash}},
+        ExtraArgs=expected_extra_args,
+    )
+
+def test_s3_client_upload_gzipped_bundle_with_kms(s3_client_with_kms, mock_boto_s3_client):
+    """
+    Verifies that upload_gzipped_bundle includes KMS args when configured.
+    """
+    # Arrange
+    mock_file = MagicMock()
+    test_hash = "fake-hash-123"
+
+    # Act
+    s3_client_with_kms.upload_gzipped_bundle(
+        bucket="test-bucket", key="test-key", file_obj=mock_file, content_hash=test_hash
+    )
+
+    # Assert
+    # --- FIX: Assert the complete set of ExtraArgs including KMS ---
+    expected_extra_args = {
+        "Metadata": {"content-sha256": test_hash},
+        "ContentEncoding": "gzip",
+        "ContentType": "application/gzip",
+        "ServerSideEncryption": "aws:kms",
+        "SSEKMSKeyId": "test-kms-key",
+    }
+    mock_boto_s3_client.upload_fileobj.assert_called_once_with(
+        Fileobj=mock_file,
+        Bucket="test-bucket",
+        Key="test-key",
+        ExtraArgs=expected_extra_args,
+    )
+
+def test_s3_client_copy_bundle(s3_client, mock_boto_s3_client):
+    """
+    Verifies the new copy_bundle method calls copy_object with correct arguments.
+    """
+    # Arrange
+    source_bucket, source_key = "source-bucket", "source-key.gz"
+    dest_bucket, dest_key = "dest-bucket", "dest-key.gz"
+
+    # Act
+    s3_client.copy_bundle(source_bucket, source_key, dest_bucket, dest_key)
+
+    # Assert
+    mock_boto_s3_client.copy_object.assert_called_once_with(
+        Bucket=dest_bucket,
+        Key=dest_key,
+        CopySource={'Bucket': source_bucket, 'Key': source_key},
+        MetadataDirective="COPY",
     )
 
 # -----------------------------------------------------------------------------
@@ -88,17 +147,27 @@ def test_dynamodb_check_and_set_idempotency_succeeds_for_new_key(
     Verifies that the method returns True when the key is new and put_item succeeds.
     """
     # Arrange
-    test_key = "new-key"
+    test_idempotency_key = "new-hash-key"
+    test_original_key = "path/to/original/file.txt"
     test_ttl = 12345
 
     # Act
-    result = dynamodb_client.check_and_set_idempotency(test_key, test_ttl)
+    # --- FIX: Pass the new 'original_object_key' argument ---
+    result = dynamodb_client.check_and_set_idempotency(
+        test_idempotency_key, test_original_key, test_ttl
+    )
 
     # Assert
+    # --- FIX: Assert the new Item structure in the put_item call ---
+    expected_item = {
+        "idempotency_key": {"S": test_idempotency_key},
+        "object_key": {"S": test_original_key},
+        "ttl": {"N": str(test_ttl)},
+    }
     mock_boto_dynamodb_client.put_item.assert_called_once_with(
         TableName="test-idempotency-table",
-        Item={"object_key": {"S": test_key}, "ttl": {"N": str(test_ttl)}},
-        ConditionExpression="attribute_not_exists(object_key)",
+        Item=expected_item,
+        ConditionExpression="attribute_not_exists(idempotency_key)",
     )
     assert result is True
 
@@ -115,7 +184,10 @@ def test_dynamodb_check_and_set_idempotency_fails_for_existing_key(
     )
 
     # Act
-    result = dynamodb_client.check_and_set_idempotency("existing-key", 12345)
+    # --- FIX: Pass the new 'original_object_key' argument ---
+    result = dynamodb_client.check_and_set_idempotency(
+        "existing-key", "path/to/original.txt", 12345
+    )
 
     # Assert
     assert result is False
@@ -134,4 +206,7 @@ def test_dynamodb_check_and_set_idempotency_reraises_other_errors(
 
     # Act & Assert
     with pytest.raises(ClientError):
-        dynamodb_client.check_and_set_idempotency("any-key", 12345)
+        # --- FIX: Pass the new 'original_object_key' argument ---
+        dynamodb_client.check_and_set_idempotency(
+            "any-key", "path/to/original.txt", 12345
+        )

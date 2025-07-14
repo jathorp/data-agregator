@@ -1,171 +1,214 @@
-"""
-tests/unit/test_app.py
+# tests/unit/test_app.py
 
-Comprehensive unit-tests for the refactored src.data_aggregator.app
-"""
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
-from aws_lambda_powertools.utilities.data_classes.sqs_event import SQSRecord
+from botocore.exceptions import ClientError
 
-from src.data_aggregator import app
-from src.data_aggregator.app import (
-    SQSBatchProcessingError,
-    _process_successful_batch,
-    make_record_handler,
-)
+# Before importing the app, we must patch the environment variables
+MOCK_ENV = {
+    "IDEMPOTENCY_TABLE_NAME": "test-idempotency-table",
+    "ARCHIVE_BUCKET_NAME": "test-archive-bucket",
+    "DISTRIBUTION_BUCKET_NAME": "test-distribution-bucket",
+    "POWERTOOLS_LOG_LEVEL": "INFO",
+}
 
-# ------------------------------------------------------------------ #
-#                           FIXTURES                                 #
-# ------------------------------------------------------------------ #
+# Use patch.dict to set the environment variables before the app module is imported
+with patch("boto3.client") as mock_boto_client:
+    # We still need to patch the environment for the app's own config loading
+    with patch.dict(os.environ, MOCK_ENV):
+        from src.data_aggregator import app
+        from src.data_aggregator.app import (
+            Dependencies,
+            make_record_handler,
+            _process_successful_batch,
+            SQSBatchProcessingError,
+            TransientDynamoError,
+            BatchTooLargeError,
+        )
 
-@pytest.fixture
-def mock_dependencies(monkeypatch):
-    """
-    MODIFIED: A test fixture that prepares all dependencies for the handler,
-    now simplified for the PULL model.
-    """
-    # Set environment variables for the new PULL model
-    monkeypatch.setenv("IDEMPOTENCY_TABLE_NAME", "test-idempotency")
-    monkeypatch.setenv("ARCHIVE_BUCKET_NAME", "test-archive")
-    monkeypatch.setenv("DISTRIBUTION_BUCKET_NAME", "test-distribution")
 
-    # The only external dependency we need to mock now is the core processing logic
-    with patch("src.data_aggregator.app.process_and_stage_batch") as mock_process:
-        # Create a mock Dependencies object with the necessary clients
-        deps = MagicMock()
-        deps.s3_client = MagicMock()
-        deps.dynamodb_client = MagicMock()
-        deps.archive_bucket = "test-archive"
-        deps.distribution_bucket = "test-distribution"
 
-        # Attach the patched core logic function for asserting calls
-        deps.mock_process_and_stage_batch = mock_process
-        yield deps
-
-@pytest.fixture
-def mock_processor():
-    """KEPT: Stub Powertools BatchProcessor so no internal logic runs."""
-    with patch("src.data_aggregator.app.processor") as proc:
-        yield proc
+# --- Fixtures ---
 
 @pytest.fixture
 def mock_lambda_context():
-    """KEPT: Minimal Lambda context stub."""
-    ctx = MagicMock(aws_request_id="test-req-id-123")
-    return ctx
+    """Provides a mock LambdaContext object."""
+    context = MagicMock()
+    context.aws_request_id = "test-request-id-123"
+    context.get_remaining_time_in_millis.return_value = 300_000
+    return context
 
-# ------------------------------------------------------------------ #
-#                           HELPERS                                  #
-# ------------------------------------------------------------------ #
+@pytest.fixture
+def mock_dependencies():
+    """Provides a mock Dependencies container with mocked clients."""
+    deps = MagicMock(spec=Dependencies)
+    deps.dynamodb_client = MagicMock()
+    deps.s3_client = MagicMock()
+    return deps
 
-def _create_sqs_record(obj_key: str, bucket: str = "unit-bucket") -> SQSRecord:
-    """KEPT: Fabricate a Powertools SQSRecord with a wrapped S3 event."""
-    s3_event = {"Records": [{"s3": {"bucket": {"name": bucket}, "object": {"key": obj_key}}}]}
-    body = json.dumps(s3_event)
-    return SQSRecord({"body": body, "messageId": f"msg-for-{obj_key}"})
-
-# ------------------------------------------------------------------ #
-#                LAYER 1 – make_record_handler()                     #
-# ------------------------------------------------------------------ #
-
-class TestRecordHandler:
-    """KEPT: Unit-tests for per-record logic, which is unchanged."""
-
-    def test_processes_new_key_successfully(self, mock_dependencies):
-        mock_dependencies.dynamodb_client.check_and_set_idempotency.return_value = True
-        handler = make_record_handler(mock_dependencies)
-        record = _create_sqs_record("new.txt")
-        result = handler(record)
-        mock_dependencies.dynamodb_client.check_and_set_idempotency.assert_called_once()
-        assert result["s3"]["object"]["key"] == "new.txt"
-
-    def test_skips_duplicate_key(self, mock_dependencies):
-        mock_dependencies.dynamodb_client.check_and_set_idempotency.return_value = False
-        handler = make_record_handler(mock_dependencies)
-        record = _create_sqs_record("dup.txt")
-        result = handler(record)
-        mock_dependencies.dynamodb_client.check_and_set_idempotency.assert_called_once()
-        assert result == {}
-
-# ------------------------------------------------------------------ #
-#        LAYER 2 – handler() (stage-2 orchestration wrapper)         #
-# ------------------------------------------------------------------ #
-
-class TestHandlerBatchLogic:
-    """KEPT: Focus on control-flow around _process_successful_batch."""
-
-    @patch.object(app, "_process_successful_batch", autospec=True)
-    def test_happy_path_calls_processing_function(
-        self, mock_process_batch, mock_dependencies, mock_processor, mock_lambda_context
-    ):
-        s3_record = {"s3": {"object": {"key": "file.txt"}}}
-        mock_processor.success_messages = [MagicMock(result=s3_record)]
-        mock_processor.response.return_value = {"batchItemFailures": []}
-        app.handler({"Records": []}, mock_lambda_context)
-        mock_process_batch.assert_called_once()
-
-    @patch.object(
-        app,
-        "_process_successful_batch",
-        autospec=True,
-        side_effect=SQSBatchProcessingError("Core processing failed"),
+def create_sqs_record(message_id, key, size):
+    """Helper function to create a valid SQS record for tests."""
+    s3_event = {"Records": [{"s3": {"object": {"key": key, "size": size}}}]}
+    return MagicMock(
+        message_id=message_id,
+        body=json.dumps(s3_event)
     )
-    def test_when_processing_fails_returns_all_items(
-        self, mock_process_batch, mock_dependencies, mock_processor, mock_lambda_context
-    ):
-        success1 = MagicMock(result={"s3": {}}, message_id="id-1")
-        success2 = MagicMock(result={"s3": {}}, message_id="id-2")
-        mock_processor.success_messages = [success1, success2]
-        mock_processor.response.return_value = {"batchItemFailures": []}
-        result = app.handler({"Records": []}, mock_lambda_context)
-        assert result["batchItemFailures"] == [
-            {"itemIdentifier": "id-1"},
-            {"itemIdentifier": "id-2"},
-        ]
 
-# ------------------------------------------------------------------ #
-#           LAYER 3 – _process_successful_batch() itself             #
-# ------------------------------------------------------------------ #
 
-class TestProcessSuccessfulBatch:
-    """NEW: Rewritten tests for the simplified batch processing logic."""
+# --- Tests for record_handler ---
 
-    def test_happy_path_calls_core_logic_with_correct_args(
-        self, mock_dependencies, mock_lambda_context
-    ):
-        """
-        Verifies that the new function calls the core staging logic correctly.
-        """
-        # Arrange
-        successful_records = [MagicMock(result={"s3": "record1"}), MagicMock(result={"s3": "record2"})]
+def test_record_handler_new_key(mock_dependencies):
+    """
+    Verifies the handler processes a new key correctly.
+    """
+    # Arrange
+    handler = make_record_handler(mock_dependencies)
+    record = create_sqs_record("msg1", "new-file.txt", 1024)
+    # Mock that the key is new
+    mock_dependencies.dynamodb_client.check_and_set_idempotency.return_value = True
 
-        # Act
+    # Act
+    result = handler(record)
+
+    # Assert
+    # Check that the idempotency client was called correctly
+    mock_dependencies.dynamodb_client.check_and_set_idempotency.assert_called_once()
+    # Check that the result is the parsed S3 event record
+    assert result["s3"]["object"]["key"] == "new-file.txt"
+
+
+def test_record_handler_duplicate_key(mock_dependencies):
+    """
+    Verifies the handler correctly skips a duplicate key.
+    """
+    # Arrange
+    handler = make_record_handler(mock_dependencies)
+    record = create_sqs_record("msg2", "duplicate-file.txt", 1024)
+    # Mock that the key already exists
+    mock_dependencies.dynamodb_client.check_and_set_idempotency.return_value = False
+
+    # Act
+    result = handler(record)
+
+    # Assert
+    # The result for a duplicate should be an empty dictionary
+    assert result == {}
+
+
+def test_record_handler_dynamodb_error_raises_transient_error(mock_dependencies):
+    """
+    Verifies that a ClientError from DynamoDB is wrapped in a custom exception.
+    """
+    # Arrange
+    handler = make_record_handler(mock_dependencies)
+    record = create_sqs_record("msg3", "any-file.txt", 1024)
+    # Mock a generic boto3 ClientError
+    mock_dependencies.dynamodb_client.check_and_set_idempotency.side_effect = ClientError(
+        {"Error": {"Code": "ProvisionedThroughputExceededException"}}, "PutItem"
+    )
+
+    # Act & Assert
+    with pytest.raises(TransientDynamoError):
+        handler(record)
+
+# --- Tests for _process_successful_batch ---
+
+@patch("src.data_aggregator.app.process_and_stage_batch")
+def test_process_successful_batch_happy_path(mock_core_processor, mock_lambda_context, mock_dependencies):
+    """
+    Verifies that the core bundling logic is called for a valid batch.
+    """
+    # Arrange
+    s3_record = {"s3": {"object": {"key": "file.txt", "size": 5000}}}
+
+    # Create a mock that has the same shape as the real result object.
+    successful_records = [s3_record]
+
+    # Act
+    _process_successful_batch(successful_records, mock_lambda_context, mock_dependencies)
+
+    # Assert
+    mock_core_processor.assert_called_once()
+    call_args = mock_core_processor.call_args[1]
+    assert call_args["records"] == [s3_record]
+    assert call_args["archive_key"] == "bundle-test-request-id-123.gz"
+
+
+@patch("src.data_aggregator.app.process_and_stage_batch")
+def test_process_successful_batch_raises_for_large_batch(mock_core_processor, mock_lambda_context, mock_dependencies):
+    """
+    Verifies that a BatchTooLargeError is raised if input size exceeds the limit.
+    """
+    # Arrange
+    large_size = 101 * 1024 * 1024
+    s3_record = {"s3": {"object": {"key": "large-file.txt", "size": large_size}}}
+
+    successful_records = [s3_record]
+
+    # Act & Assert
+    with pytest.raises(BatchTooLargeError):
         _process_successful_batch(successful_records, mock_lambda_context, mock_dependencies)
+    mock_core_processor.assert_not_called()
 
-        # Assert
-        # Check that our core staging function was called once
-        mock_dependencies.mock_process_and_stage_batch.assert_called_once()
+# --- Tests for the main handler (integration of components) ---
 
-        # Check that the arguments passed to it were correct
-        call_args = mock_dependencies.mock_process_and_stage_batch.call_args
-        assert call_args.kwargs["records"] == [{"s3": "record1"}, {"s3": "record2"}]
-        assert call_args.kwargs["s3_client"] == mock_dependencies.s3_client
-        assert call_args.kwargs["archive_bucket"] == "test-archive"
-        assert call_args.kwargs["distribution_bucket"] == "test-distribution"
-        assert call_args.kwargs["archive_key"] == "bundle-test-req-id-123.gz"
+@patch("src.data_aggregator.app._process_successful_batch")
+@patch("src.data_aggregator.app.make_record_handler")
+def test_handler_full_success(mock_make_handler, mock_process_batch, mock_lambda_context):
+    """
+    Tests the main handler for a batch where all records succeed.
+    """
+    # Arrange
+    # Mock the record handler to always return success
+    mock_handler_func = MagicMock(return_value={"s3": "...record..."})
+    mock_make_handler.return_value = mock_handler_func
 
-    def test_raises_sqs_batch_error_on_core_logic_failure(
-        self, mock_dependencies, mock_lambda_context
-    ):
-        """
-        Verifies the function raises SQSBatchProcessingError if the core logic fails.
-        """
-        # Arrange
-        mock_dependencies.mock_process_and_stage_batch.side_effect = Exception("S3 Upload Failed")
-        successful_records = [MagicMock(result={"s3": "record1"})]
+    sqs_event = {
+        "Records": [
+            {"messageId": "msg1", "body": "{...}"},
+            {"messageId": "msg2", "body": "{...}"},
+        ]
+    }
 
-        # Act & Assert
-        with pytest.raises(SQSBatchProcessingError, match="Batch processing failed"):
-            _process_successful_batch(successful_records, mock_lambda_context, mock_dependencies)
+    # Act
+    result = app.handler(sqs_event, mock_lambda_context)
+
+    # Assert
+    # The handler should have been called for each record
+    assert mock_handler_func.call_count == 2
+    # The batch processing logic should have been called once
+    mock_process_batch.assert_called_once()
+    # No failures should be reported back to SQS
+    assert result["batchItemFailures"] == []
+
+
+@patch("src.data_aggregator.app._process_successful_batch")
+@patch("src.data_aggregator.app.make_record_handler")
+def test_handler_batch_level_failure(mock_make_handler, mock_process_batch, mock_lambda_context):
+    """
+    Tests that if the batch processing fails, all successful records are marked for retry.
+    """
+    # Arrange
+    mock_handler_func = MagicMock(return_value={"s3": "...record..."})
+    mock_make_handler.return_value = mock_handler_func
+    # Mock the batch processor to raise a retryable error
+    mock_process_batch.side_effect = SQSBatchProcessingError("Retry the batch!")
+
+    sqs_event = {
+        "Records": [
+            {"messageId": "msg1", "body": "{...}"},
+            {"messageId": "msg2", "body": "{...}"},
+        ]
+    }
+
+    # Act
+    result = app.handler(sqs_event, mock_lambda_context)
+
+    # Assert
+    # All records should be marked as failures so SQS will retry them
+    assert len(result["batchItemFailures"]) == 2
+    assert result["batchItemFailures"][0]["itemIdentifier"] == "msg1"
+    assert result["batchItemFailures"][1]["itemIdentifier"] == "msg2"

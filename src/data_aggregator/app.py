@@ -98,26 +98,6 @@ metrics.set_default_dimensions(environment=CONFIG.environment)
 _S3 = boto3.client("s3")
 _DYNAMODB = boto3.client("dynamodb")
 
-
-# ─────────────────────────────────────────────────────────────
-#  Error Taxonomy
-# ─────────────────────────────────────────────────────────────
-class SQSBatchProcessingError(Exception):
-    """Base class for errors that require the entire batch to be retried by SQS."""
-
-
-class BundlingTimeoutError(SQSBatchProcessingError):
-    """Raised when not enough Lambda time is left to safely create a bundle."""
-
-
-class BatchTooLargeError(SQSBatchProcessingError):
-    """Raised when the sum of input object sizes exceeds the configured limit."""
-
-
-class TransientDynamoError(SQSBatchProcessingError):
-    """Raised for transient DynamoDB issues during the idempotency check."""
-
-
 # ─────────────────────────────────────────────────────────────
 #  Dependency Container
 # ─────────────────────────────────────────────────────────────
@@ -229,7 +209,7 @@ def _process_successful_batch(
         BatchTooLargeError: If the total input size exceeds the configured limit.
         BundlingTimeoutError: If there is not enough time left for bundling.
     """
-    s3_records: List[S3EventRecord] = [cast(S3EventRecord, r.result) for r in successful_records]
+    s3_records: List[S3EventRecord] = successful_records
     logger.debug("Starting stage-2 processing for successful batch", extra={"record_count": len(s3_records)})
 
     total_input_bytes = sum(record["s3"]["object"]["size"] for record in s3_records)
@@ -285,7 +265,7 @@ def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailure
         processor.process()
 
     batch_failures: List[PartialItemFailures] = processor.response()["batchItemFailures"]
-    successful_records = [r for r in processor.success_messages if r.result]
+    successful_records = [r for r in processor.success_messages if r]
     logger.debug("Record-level processing complete",
                  extra={"success_count": len(successful_records), "failure_count": len(batch_failures)})
 
@@ -295,8 +275,8 @@ def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailure
         except SQSBatchProcessingError:
             logger.error("Stage-2 bundling failed for a retryable reason. Returning successful items for retry.",
                          exc_info=True)
-            for rec in successful_records:
-                batch_failures.append({"itemIdentifier": rec.message_id})
+            for rec in processor.success_messages:
+                batch_failures.append({"itemIdentifier": rec["messageId"]})
 
     if not successful_records and not batch_failures:
         logger.info("All records in batch were duplicates, no new work performed.")

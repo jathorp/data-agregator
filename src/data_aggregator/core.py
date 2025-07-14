@@ -17,7 +17,7 @@ from typing import BinaryIO, Iterator, List, Tuple, cast
 
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
-from .app import BundlingTimeoutError
+from .exceptions import BundlingTimeoutError
 from .clients import S3Client
 from .schemas import S3EventRecord
 

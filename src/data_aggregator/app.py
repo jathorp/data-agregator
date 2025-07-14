@@ -40,6 +40,12 @@ from botocore.exceptions import ClientError
 from .clients import DynamoDBClient, S3Client
 from .core import process_and_stage_batch
 from .schemas import S3EventRecord
+from .exceptions import (
+    SQSBatchProcessingError,
+    BundlingTimeoutError,
+    BatchTooLargeError,
+    TransientDynamoError,
+)
 
 
 # ─────────────────────────────────────────────────────────────

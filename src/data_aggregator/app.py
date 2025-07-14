@@ -1,27 +1,15 @@
-# src/data_aggregator/app.py — side‑car‑list variant
+# src/data_aggregator/app.py — side‑car‑list variant (simpler “no‑raise” BatchProcessor)
 """
-Lambda entry point for the Data‑Aggregator service (SQS → S3 bundler)
+Lambda entry point for the Data‑Aggregator service (SQS → S3 bundler)
 ---------------------------------------------------------------------
-This implementation avoids mutating aws‑lambda‑powertools `SQSRecord` objects.
-Instead, the per‑record results we need later are collected in two plain Python
-lists that live in the outer scope of the handler.  This keeps the code free
-of assumptions about Powertools internals (e.g. `record.raw_event`).
-
-Execution flow
-==============
-1.  The nested `record_handler` processes each SQS message:
-    • Parses the S3 event inside the body.
-    • Performs an idempotency check in DynamoDB.
-    • For *new* objects, appends the parsed S3 record to `successful_records`
-      and the message‑id to `processed_message_ids`.
-2.  `aws_lambda_powertools.utilities.batch.BatchProcessor` orchestrates
-    record‑level retries and DLQ routing.
-3.  After stage‑1 processing, the outer handler decides whether to call
-    `_process_successful_batch`.
-4.  If bundling fails for a retryable reason, we populate `batchItemFailures`
-    with the message‑ids from `processed_message_ids` so SQS will retry them.
-
-This pattern is library‑agnostic and upgrade‑safe.
+Key design choices
+==================
+* **Side‑car lists** collect per‑record state; we never mutate Powertools
+  objects. This keeps us library‑agnostic and easy to reason about.
+* **BatchProcessor(raise_on_entire_batch_failure=False)** – Powertools will now
+  *always* populate `processor.response()` instead of throwing
+  `BatchProcessingError`. That means we no longer need the `try/except` guard
+  nor the manual translation of `failed_messages`.
 """
 from __future__ import annotations
 
@@ -86,7 +74,7 @@ class EnvConfig:
 CONFIG = EnvConfig()
 
 # ─────────────────────────────────────────────────────────────
-#  Observability
+#  Observability primitives
 # ─────────────────────────────────────────────────────────────
 logger = Logger(service="data-aggregator", level=CONFIG.log_level, log_uncaught_exceptions=True)
 tracer = Tracer(service="data-aggregator")
@@ -123,7 +111,7 @@ def _process_successful_batch(
     context: LambdaContext,
     deps: Dependencies,
 ) -> None:
-    """Pre‑flight checks then delegate to `process_and_stage_batch`."""
+    """Run pre‑flight checks then call `process_and_stage_batch`."""
     logger.debug("Stage‑2 processing", extra={"record_count": len(successful_records)})
 
     total_input = sum(r["s3"]["object"]["size"] for r in successful_records)
@@ -156,7 +144,7 @@ def _process_successful_batch(
 @tracer.capture_lambda_handler
 @metrics.log_metrics(capture_cold_start_metric=True)
 def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailureResponse:
-    """Top‑level handler invoked by Lambda."""
+    """Main Lambda handler (SQS batch)."""
     if not event.get("Records"):
         logger.info("No records, nothing to do")
         return {"batchItemFailures": []}
@@ -168,7 +156,7 @@ def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailure
     processed_message_ids: list[str] = []
 
     # -----------------------------------------------------
-    # Inner record‑handler (captures the two lists above)
+    # Inner record handler
     # -----------------------------------------------------
     def record_handler(record: SQSRecord) -> Dict | S3EventRecord:
         try:
@@ -179,12 +167,12 @@ def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailure
             logger.warning("Malformed SQS message", extra={"body": record.body})
             raise ValueError("Malformed SQS message")
 
-        id_hash = hashlib.sha256(object_key.encode()).hexdigest()
+        hash_key = hashlib.sha256(object_key.encode()).hexdigest()
         expiry = int(time.time()) + CONFIG.idempotency_ttl_seconds
 
         try:
             is_new = deps.dynamodb_client.check_and_set_idempotency(
-                idempotency_key=id_hash,
+                idempotency_key=hash_key,
                 original_object_key=object_key,
                 ttl=expiry,
             )
@@ -196,23 +184,26 @@ def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailure
             metrics.add_metric("DuplicatesSkipped", MetricUnit.Count, 1)
             return {}
 
-        # New object — cache for stage‑2
         successful_records.append(s3_record)
         processed_message_ids.append(record.message_id)
         metrics.add_metric("NewObjectsProcessed", MetricUnit.Count, 1)
         return s3_record
 
     # -----------------------------------------------------
-    # BatchProcessor orchestration
+    # BatchProcessor orchestration (stage 1)
     # -----------------------------------------------------
-    processor = BatchProcessor(event_type=EventType.SQS)
+    processor = BatchProcessor(
+        event_type=EventType.SQS,
+        raise_on_entire_batch_failure=False,  # ← don’t raise; always return failures list
+    )
+
     with processor(records=event["Records"], handler=record_handler):
         processor.process()
 
     batch_failures: List[PartialItemFailures] = processor.response()["batchItemFailures"]
 
     logger.debug(
-        "Record‑level processing done",
+        "Stage‑1 complete",
         extra={"success_count": len(successful_records), "failure_count": len(batch_failures)},
     )
 
@@ -227,6 +218,7 @@ def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailure
             for msg_id in processed_message_ids:
                 batch_failures.append({"itemIdentifier": msg_id})
 
+    # All duplicates – nothing sent or failed
     if not successful_records and not batch_failures:
         metrics.add_metric("DuplicateOnlyBatch", MetricUnit.Count, 1)
         logger.info("Batch contained only duplicates")

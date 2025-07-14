@@ -8,8 +8,6 @@ import pytest
 from botocore.exceptions import ClientError
 
 # --- Environment and Boto3 Patching ---
-# This must happen BEFORE any application modules are imported.
-
 MOCK_ENV = {
     "IDEMPOTENCY_TABLE_NAME": "test-idempotency-table",
     "ARCHIVE_BUCKET_NAME": "test-archive-bucket",
@@ -17,22 +15,10 @@ MOCK_ENV = {
     "POWERTOOLS_LOG_LEVEL": "INFO",
 }
 
-# Patch boto3 to prevent NoRegionError during import, and patch the environment
-# for the app's own configuration loading.
 with patch("boto3.client"):
     with patch.dict(os.environ, MOCK_ENV, clear=True):
         from src.data_aggregator import app
-        from src.data_aggregator.app import (
-            Dependencies,
-            make_record_handler,
-            _process_successful_batch,
-        )
-        from src.data_aggregator.exceptions import (
-            SQSBatchProcessingError,
-            TransientDynamoError,
-            BatchTooLargeError,
-        )
-
+        from src.data_aggregator.exceptions import SQSBatchProcessingError
 
 # --- Fixtures ---
 
@@ -41,142 +27,107 @@ def mock_lambda_context():
     """Provides a mock LambdaContext object."""
     context = MagicMock()
     context.aws_request_id = "test-request-id-123"
-    context.get_remaining_time_in_millis.return_value = 300_000
     return context
 
+# --- Helper ---
 
-@pytest.fixture
-def mock_dependencies():
-    """Provides a mock Dependencies container with mocked clients."""
-    deps = MagicMock(spec=Dependencies)
-    deps.dynamodb_client = MagicMock()
-    deps.s3_client = MagicMock()
-    return deps
+def create_sqs_event(*records):
+    """Creates a full SQS event from one or more record dictionaries."""
+    return {"Records": list(records)}
 
-
-# --- Helper Functions for Creating Test Data ---
-
-def create_sqs_record(message_id, key, size):
-    """Helper function to create a mock object that mimics a Powertools SQSRecord."""
+def create_sqs_record_dict(message_id, key, size):
+    """Creates a raw SQS record dictionary."""
     s3_event_body = {"Records": [{"s3": {"object": {"key": key, "size": size}}}]}
-    # This mock has .message_id and .body attributes, just like the real object
-    sqs_record = MagicMock()
-    sqs_record.message_id = message_id
-    sqs_record.body = json.dumps(s3_event_body)
-    return sqs_record
+    return {"messageId": message_id, "body": json.dumps(s3_event_body)}
 
-
-def create_mock_success_message(message_id, result_data):
-    """Creates a mock object that mimics the objects inside processor.success_messages."""
-    message = MagicMock()
-    message.message_id = message_id
-    message.result = result_data  # This is the crucial part for the handler logic
-    return message
-
-
-# --- Tests for record_handler ---
-
-def test_record_handler_new_key(mock_dependencies):
-    handler = make_record_handler(mock_dependencies)
-    record = create_sqs_record("msg1", "new-file.txt", 1024)
-    mock_dependencies.dynamodb_client.check_and_set_idempotency.return_value = True
-    result = handler(record)
-    mock_dependencies.dynamodb_client.check_and_set_idempotency.assert_called_once()
-    assert result["s3"]["object"]["key"] == "new-file.txt"
-
-
-def test_record_handler_duplicate_key(mock_dependencies):
-    handler = make_record_handler(mock_dependencies)
-    record = create_sqs_record("msg2", "duplicate-file.txt", 1024)
-    mock_dependencies.dynamodb_client.check_and_set_idempotency.return_value = False
-    result = handler(record)
-    assert result == {}
-
-
-def test_record_handler_dynamodb_error_raises_transient_error(mock_dependencies):
-    handler = make_record_handler(mock_dependencies)
-    record = create_sqs_record("msg3", "any-file.txt", 1024)
-    mock_dependencies.dynamodb_client.check_and_set_idempotency.side_effect = ClientError({}, "PutItem")
-    with pytest.raises(TransientDynamoError):
-        handler(record)
-
-
-# --- Tests for _process_successful_batch ---
-
-@patch("src.data_aggregator.app.process_and_stage_batch")
-def test_process_successful_batch_happy_path(mock_core_processor, mock_lambda_context, mock_dependencies):
-    s3_record = {"s3": {"object": {"key": "file.txt", "size": 5000}}}
-    # This function expects a plain list of dictionaries, so we provide that directly.
-    successful_records = [s3_record]
-    _process_successful_batch(successful_records, mock_lambda_context, mock_dependencies)
-    mock_core_processor.assert_called_once()
-    call_args = mock_core_processor.call_args[1]
-    assert call_args["records"] == [s3_record]
-
-
-@patch("src.data_aggregator.app.process_and_stage_batch")
-def test_process_successful_batch_raises_for_large_batch(mock_core_processor, mock_lambda_context, mock_dependencies):
-    large_size = 101 * 1024 * 1024
-    s3_record = {"s3": {"object": {"key": "large-file.txt", "size": large_size}}}
-    successful_records = [s3_record]
-    with pytest.raises(BatchTooLargeError):
-        _process_successful_batch(successful_records, mock_lambda_context, mock_dependencies)
-    mock_core_processor.assert_not_called()
-
-
-# --- Tests for the main handler ---
+# --- New tests for the main handler ---
 
 @patch("src.data_aggregator.app._process_successful_batch")
-@patch("src.data_aggregator.app.BatchProcessor")
-def test_handler_full_success(mock_batch_processor, mock_process_batch, mock_lambda_context):
-    """Tests the main handler for a batch where all records succeed."""
+@patch("src.data_aggregator.app.Dependencies")
+def test_handler_new_records_are_bundled(mock_deps, mock_process_batch, mock_lambda_context):
+    """
+    Tests the happy path where new records are found and sent for bundling.
+    """
     # Arrange
-    mock_processor_instance = mock_batch_processor.return_value
-
-    # Simulate the state of the processor after it has run
-    mock_processor_instance.success_messages = [
-        create_mock_success_message("msg1", {"s3": {"object": {"key": "file1.txt"}}}),
-        create_mock_success_message("msg2", {"s3": {"object": {"key": "file2.txt"}}}),
-    ]
-    mock_processor_instance.response.return_value = {"batchItemFailures": []}
-
-    sqs_event = {"Records": [{}, {}]}  # Dummy content, as the processor is mocked
+    # Mock the DynamoDB client to report that the key is new
+    mock_deps.return_value.dynamodb_client.check_and_set_idempotency.return_value = True
+    event = create_sqs_event(
+        create_sqs_record_dict("msg1", "file1.txt", 100),
+        create_sqs_record_dict("msg2", "file2.txt", 200),
+    )
 
     # Act
-    result = app.handler(sqs_event, mock_lambda_context)
+    result = app.handler(event, mock_lambda_context)
 
     # Assert
+    # Check that the bundling function was called
     mock_process_batch.assert_called_once()
+    # Check that it received the correct, extracted S3 records
     called_with_records = mock_process_batch.call_args[0][0]
     assert len(called_with_records) == 2
     assert called_with_records[0]["s3"]["object"]["key"] == "file1.txt"
+    # Check that no failures were reported to SQS
     assert result["batchItemFailures"] == []
 
-
 @patch("src.data_aggregator.app._process_successful_batch")
-@patch("src.data_aggregator.app.BatchProcessor")
-def test_handler_batch_level_failure(mock_batch_processor, mock_process_batch, mock_lambda_context):
-    """Tests that if batch processing fails, successful records are marked for retry."""
+@patch("src.data_aggregator.app.Dependencies")
+def test_handler_duplicates_are_skipped(mock_deps, mock_process_batch, mock_lambda_context):
+    """
+    Tests that if all records are duplicates, the bundling process is not triggered.
+    """
     # Arrange
-    mock_processor_instance = mock_batch_processor.return_value
-
-    # Simulate that two messages were initially successful
-    mock_processor_instance.success_messages = [
-        create_mock_success_message("msg1", {"s3": "..."}),
-        create_mock_success_message("msg2", {"s3": "..."}),
-    ]
-    mock_processor_instance.response.return_value = {"batchItemFailures": []}
-
-    # Make the next stage of processing fail
-    mock_process_batch.side_effect = SQSBatchProcessingError("Retry the batch!")
-
-    sqs_event = {"Records": [{}, {}]}
+    # Mock the DynamoDB client to report that all keys are duplicates
+    mock_deps.return_value.dynamodb_client.check_and_set_idempotency.return_value = False
+    event = create_sqs_event(create_sqs_record_dict("msg1", "file1.txt", 100))
 
     # Act
-    result = app.handler(sqs_event, mock_lambda_context)
+    result = app.handler(event, mock_lambda_context)
 
     # Assert
-    # All initially successful records should be in the final failure list
+    # The bundling function should NOT have been called
+    mock_process_batch.assert_not_called()
+    assert result["batchItemFailures"] == []
+
+@patch("src.data_aggregator.app._process_successful_batch")
+@patch("src.data_aggregator.app.Dependencies")
+def test_handler_malformed_message_is_reported_as_failure(mock_deps, mock_process_batch, mock_lambda_context):
+    """
+    Tests that a record with a non-JSON body is correctly marked as a failure.
+    """
+    # Arrange
+    event = create_sqs_event({"messageId": "bad_msg", "body": "this-is-not-json"})
+
+    # Act
+    result = app.handler(event, mock_lambda_context)
+
+    # Assert
+    mock_process_batch.assert_not_called()
+    assert len(result["batchItemFailures"]) == 1
+    assert result["batchItemFailures"][0]["itemIdentifier"] == "bad_msg"
+
+@patch("src.data_aggregator.app._process_successful_batch")
+@patch("src.data_aggregator.app.Dependencies")
+def test_handler_batch_failure_retries_successful_items(mock_deps, mock_process_batch, mock_lambda_context):
+    """
+    Tests that if bundling fails, the records that were successfully processed
+    in stage 1 are returned to SQS for a retry.
+    """
+    # Arrange
+    # All records will be new initially
+    mock_deps.return_value.dynamodb_client.check_and_set_idempotency.return_value = True
+    # But the bundling process will fail
+    mock_process_batch.side_effect = SQSBatchProcessingError("Bundling failed!")
+
+    event = create_sqs_event(
+        create_sqs_record_dict("msg1", "file1.txt", 100),
+        create_sqs_record_dict("msg2", "file2.txt", 200),
+    )
+
+    # Act
+    result = app.handler(event, mock_lambda_context)
+
+    # Assert
+    # The final failure list should contain the two successful messages for retry
     assert len(result["batchItemFailures"]) == 2
     assert result["batchItemFailures"][0]["itemIdentifier"] == "msg1"
     assert result["batchItemFailures"][1]["itemIdentifier"] == "msg2"

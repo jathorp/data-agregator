@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import os
 import tarfile
 from unittest.mock import MagicMock, patch
 
@@ -11,7 +12,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from src.data_aggregator.core import (
     create_tar_gz_bundle_stream,
     process_and_stage_batch,
-    _sanitize_s3_key,
+    _sanitize_s3_key, _buffer_and_validate,
 )
 from src.data_aggregator.exceptions import BundlingTimeoutError
 
@@ -141,7 +142,7 @@ def test_create_tar_gz_bundle_stream_creates_valid_archive(mock_lambda_context):
         ("CON.txt", "CON.txt"),  # Another device name
         # ─── Control / percent-encoded / dot keys ─────────────────────────────────
         ("data/file\0name.txt", None),  # NUL byte ⇒ reject
-        ("bad\rname.txt", "bad\rname.txt"),  # Other control char – currently allowed
+        ("bad\rname.txt", None),  # Other control char
         (
             "foo/%2e%2e/%2e%2e/passwd",
             "foo/%2e%2e/%2e%2e/passwd",
@@ -151,7 +152,7 @@ def test_create_tar_gz_bundle_stream_creates_valid_archive(mock_lambda_context):
         ("./", None),  # "./" with slash ⇒ reject
         ("././", None),  # Repeated "./" ⇒ reject
         # ─── Pathological length / trailing chars ─────────────────────────────────
-        ("a" * 1025 + ".txt", "a" * 1025 + ".txt"),  # >1024-byte key (S3 would reject)
+        ("a" * 1025 + ".txt", None),  # >1024-byte key (S3 would reject)
         ("trickyfile.txt. ", "trickyfile.txt. "),  # Trailing dot/space (Windows quirk)
         # ─── Unicode-normalisation twins (both allowed, distinct) ─────────────────
         ("e\u0301.txt", "e\u0301.txt"),  # "é" composed with accent
@@ -230,3 +231,60 @@ def test_create_tar_gz_bundle_stream_handles_size_mismatch(mock_lambda_context):
     # FIX: The file should now be skipped entirely, resulting in an empty bundle.
     with io.BytesIO(bundle_content) as bio, tarfile.open(fileobj=bio, mode="r:gz") as tar:
         assert not tar.getmembers(), "The bundle should be empty after skipping the bad file."
+
+
+def test_buffer_and_validate_ok():
+    """Tests the happy path where the size matches."""
+    # 1. ARRANGE
+    data = b"Hello world!"
+
+    # 2. ACT
+    result = _buffer_and_validate(io.BytesIO(data), expected_size=len(data))
+
+    # 3. ASSERT
+    assert result is not None
+    buf, size = result
+
+    assert size == len(data)
+    assert buf.tell() == 0
+    assert buf.read() == data
+    buf.close()
+
+
+def test_buffer_and_validate_size_mismatch():
+    """Tests that a size mismatch returns None."""
+    # 1. ARRANGE
+    data = b"abc"
+
+    # 2. ACT
+    result = _buffer_and_validate(io.BytesIO(data), expected_size=10)
+
+    # 3. ASSERT
+    assert result is None
+
+
+def test_buffer_and_validate_spills_to_disk():
+    """Tests that the buffer correctly spills to disk for large objects."""
+    # 1. ARRANGE
+    # Use a tiny threshold so we don't allocate lots of RAM during the test
+    threshold = 1024  # 1 KiB
+    big_blob = os.urandom(threshold + 100)  # Exceed threshold
+
+    # 2. ACT
+    result = _buffer_and_validate(
+        io.BytesIO(big_blob),
+        expected_size=len(big_blob),
+        spool_threshold=threshold,  # Force rollover
+    )
+
+    # 3. ASSERT
+    assert result is not None
+    buf, size = result
+
+    assert size == len(big_blob)
+
+    # SpooledTemporaryFile sets _rolled to True once it hits disk
+    if hasattr(buf, "_rolled"):
+        assert buf._rolled is True
+
+    buf.close()

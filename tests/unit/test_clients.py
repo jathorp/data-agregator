@@ -11,25 +11,30 @@ from src.data_aggregator.clients import DynamoDBClient, S3Client
 # Fixtures for setting up clients with mock dependencies
 # -----------------------------------------------------------------------------
 
+
 @pytest.fixture
 def mock_boto_s3_client():
     """Yields a MagicMock for the boto3 S3 client."""
     return MagicMock()
+
 
 @pytest.fixture
 def s3_client(mock_boto_s3_client):
     """Yields an instance of our S3Client wrapper without KMS."""
     return S3Client(s3_client=mock_boto_s3_client)
 
+
 @pytest.fixture
 def s3_client_with_kms(mock_boto_s3_client):
     """Yields an instance of our S3Client wrapper with KMS enabled."""
     return S3Client(s3_client=mock_boto_s3_client, kms_key_id="test-kms-key")
 
+
 @pytest.fixture
 def mock_boto_dynamodb_client():
     """Yields a MagicMock for the boto3 DynamoDB client."""
     return MagicMock()
+
 
 @pytest.fixture
 def dynamodb_client(mock_boto_dynamodb_client):
@@ -40,9 +45,11 @@ def dynamodb_client(mock_boto_dynamodb_client):
         ttl_attribute="ttl",
     )
 
+
 # -----------------------------------------------------------------------------
 # Tests for S3Client
 # -----------------------------------------------------------------------------
+
 
 def test_s3_client_get_file_content_stream(s3_client, mock_boto_s3_client):
     """
@@ -60,6 +67,7 @@ def test_s3_client_get_file_content_stream(s3_client, mock_boto_s3_client):
         Bucket="test-bucket", Key="test-key"
     )
     assert result is mock_stream
+
 
 def test_s3_client_upload_gzipped_bundle(s3_client, mock_boto_s3_client):
     """
@@ -88,7 +96,10 @@ def test_s3_client_upload_gzipped_bundle(s3_client, mock_boto_s3_client):
         ExtraArgs=expected_extra_args,
     )
 
-def test_s3_client_upload_gzipped_bundle_with_kms(s3_client_with_kms, mock_boto_s3_client):
+
+def test_s3_client_upload_gzipped_bundle_with_kms(
+    s3_client_with_kms, mock_boto_s3_client
+):
     """
     Verifies that upload_gzipped_bundle includes KMS args when configured.
     """
@@ -117,6 +128,7 @@ def test_s3_client_upload_gzipped_bundle_with_kms(s3_client_with_kms, mock_boto_
         ExtraArgs=expected_extra_args,
     )
 
+
 def test_s3_client_copy_bundle(s3_client, mock_boto_s3_client):
     """
     Verifies the new copy_bundle method calls copy_object with correct arguments.
@@ -132,13 +144,15 @@ def test_s3_client_copy_bundle(s3_client, mock_boto_s3_client):
     mock_boto_s3_client.copy_object.assert_called_once_with(
         Bucket=dest_bucket,
         Key=dest_key,
-        CopySource={'Bucket': source_bucket, 'Key': source_key},
+        CopySource={"Bucket": source_bucket, "Key": source_key},
         MetadataDirective="COPY",
     )
+
 
 # -----------------------------------------------------------------------------
 # Tests for DynamoDBClient
 # -----------------------------------------------------------------------------
+
 
 def test_dynamodb_check_and_set_idempotency_succeeds_for_new_key(
     dynamodb_client, mock_boto_dynamodb_client
@@ -171,6 +185,7 @@ def test_dynamodb_check_and_set_idempotency_succeeds_for_new_key(
     )
     assert result is True
 
+
 def test_dynamodb_check_and_set_idempotency_fails_for_existing_key(
     dynamodb_client, mock_boto_dynamodb_client
 ):
@@ -191,6 +206,7 @@ def test_dynamodb_check_and_set_idempotency_fails_for_existing_key(
 
     # Assert
     assert result is False
+
 
 def test_dynamodb_check_and_set_idempotency_reraises_other_errors(
     dynamodb_client, mock_boto_dynamodb_client

@@ -25,6 +25,7 @@ class S3Client:
     """
     A wrapper for S3 client operations, focused on streaming data and security.
     """
+
     def __init__(self, s3_client: "S3ClientType", kms_key_id: Optional[str] = None):
         """
         Initializes the S3Client.
@@ -36,53 +37,93 @@ class S3Client:
         self._client = s3_client
         self._kms_key_id = kms_key_id
         if self._kms_key_id:
-            logger.debug("S3Client initialized with SSE-KMS enabled.", extra={"kms_key_id": self._kms_key_id})
+            logger.debug(
+                "S3Client initialized with SSE-KMS enabled.",
+                extra={"kms_key_id": self._kms_key_id},
+            )
 
     def get_file_content_stream(self, bucket: str, key: str) -> Any:
         """Gets an object from S3 as a streaming body."""
-        logger.debug("Requesting S3 object stream", extra={"bucket": bucket, "key": key})
+        logger.debug(
+            "Requesting S3 object stream", extra={"bucket": bucket, "key": key}
+        )
         response = self._client.get_object(Bucket=bucket, Key=key)
         return response["Body"]
 
-    def upload_gzipped_bundle(self, bucket: str, key:str, file_obj: BinaryIO, content_hash: str):
+    def upload_gzipped_bundle(
+        self, bucket: str, key: str, file_obj: BinaryIO, content_hash: str
+    ):
         """Uploads a file-like object to S3 via a managed, streaming upload."""
-        extra_args = {"Metadata": {"content-sha256": content_hash}, "ContentEncoding": "gzip", "ContentType": "application/gzip"}
+        extra_args = {
+            "Metadata": {"content-sha256": content_hash},
+            "ContentEncoding": "gzip",
+            "ContentType": "application/gzip",
+        }
         if self._kms_key_id:
-            extra_args.update({"ServerSideEncryption": "aws:kms", "SSEKMSKeyId": self._kms_key_id})
-        logger.info("Uploading bundle (archive)", extra={"bucket": bucket, "key": key, "kms_enabled": bool(self._kms_key_id)})
-        self._client.upload_fileobj(Fileobj=file_obj, Bucket=bucket, Key=key, ExtraArgs=extra_args)
-        logger.debug("Upload (PUT) completed successfully", extra={"bucket": bucket, "key": key})
+            extra_args.update(
+                {"ServerSideEncryption": "aws:kms", "SSEKMSKeyId": self._kms_key_id}
+            )
+        logger.info(
+            "Uploading bundle (archive)",
+            extra={"bucket": bucket, "key": key, "kms_enabled": bool(self._kms_key_id)},
+        )
+        self._client.upload_fileobj(
+            Fileobj=file_obj, Bucket=bucket, Key=key, ExtraArgs=extra_args
+        )
+        logger.debug(
+            "Upload (PUT) completed successfully", extra={"bucket": bucket, "key": key}
+        )
 
-    def copy_bundle(self, source_bucket: str, source_key: str, dest_bucket: str, dest_key: str):
+    def copy_bundle(
+        self, source_bucket: str, source_key: str, dest_bucket: str, dest_key: str
+    ):
         """
         Uses the efficient S3 CopyObject API to duplicate a bundle.
         This is faster and cheaper than downloading and re-uploading.
         """
-        logger.info("Copying bundle (distribution)", extra={"source": f"{source_bucket}/{source_key}", "dest": f"{dest_bucket}/{dest_key}"})
-        copy_source: CopySourceTypeDef = {'Bucket': source_bucket, 'Key': source_key}
+        logger.info(
+            "Copying bundle (distribution)",
+            extra={
+                "source": f"{source_bucket}/{source_key}",
+                "dest": f"{dest_bucket}/{dest_key}",
+            },
+        )
+        copy_source: CopySourceTypeDef = {"Bucket": source_bucket, "Key": source_key}
         extra_args = {}
         if self._kms_key_id:
-            extra_args = {"ServerSideEncryption": "aws:kms", "SSEKMSKeyId": self._kms_key_id}
+            extra_args = {
+                "ServerSideEncryption": "aws:kms",
+                "SSEKMSKeyId": self._kms_key_id,
+            }
         self._client.copy_object(
             Bucket=dest_bucket,
             Key=dest_key,
             CopySource=copy_source,
-            MetadataDirective="COPY", # Explicitly copy metadata for maintainability
-            **extra_args
+            MetadataDirective="COPY",  # Explicitly copy metadata for maintainability
+            **extra_args,
         )
-        logger.debug("CopyObject completed successfully", extra={"dest_bucket": dest_bucket, "dest_key": dest_key})
+        logger.debug(
+            "CopyObject completed successfully",
+            extra={"dest_bucket": dest_bucket, "dest_key": dest_key},
+        )
+
 
 class DynamoDBClient:
     """
     Wrapper for DynamoDB client operations, tailored for idempotency checks.
     """
-    def __init__(self, dynamo_client: "DynamoDBClientType", table_name: str, ttl_attribute: str):
+
+    def __init__(
+        self, dynamo_client: "DynamoDBClientType", table_name: str, ttl_attribute: str
+    ):
         """Initializes the DynamoDBClient."""
         self._client = dynamo_client
         self._table_name = table_name
         self._ttl_attribute = ttl_attribute
 
-    def check_and_set_idempotency(self, idempotency_key: str, original_object_key: str, ttl: int) -> bool:
+    def check_and_set_idempotency(
+        self, idempotency_key: str, original_object_key: str, ttl: int
+    ) -> bool:
         """
         Atomically writes a hashed key to the idempotency table if it doesn't exist.
 
@@ -97,19 +138,32 @@ class DynamoDBClient:
         Returns:
             True if the key was new and written, False if it was a duplicate.
         """
-        logger.debug("Checking idempotency key in DynamoDB", extra={"idempotency_key": idempotency_key})
+        logger.debug(
+            "Checking idempotency key in DynamoDB",
+            extra={"idempotency_key": idempotency_key},
+        )
         try:
             # NOTE: The DynamoDB table's primary key must be 'idempotency_key'.
             self._client.put_item(
                 TableName=self._table_name,
-                Item={"idempotency_key": {"S": idempotency_key}, "object_key": {"S": original_object_key}, self._ttl_attribute: {"N": str(ttl)}},
+                Item={
+                    "idempotency_key": {"S": idempotency_key},
+                    "object_key": {"S": original_object_key},
+                    self._ttl_attribute: {"N": str(ttl)},
+                },
                 ConditionExpression="attribute_not_exists(idempotency_key)",
             )
-            logger.debug("Idempotency key was new", extra={"idempotency_key": idempotency_key})
+            logger.debug(
+                "Idempotency key was new", extra={"idempotency_key": idempotency_key}
+            )
             return True
         except ClientError as e:
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-                logger.debug("Duplicate key detected", extra={"idempotency_key": idempotency_key})
+                logger.debug(
+                    "Duplicate key detected", extra={"idempotency_key": idempotency_key}
+                )
                 return False
-            logger.error("Unexpected DynamoDB error during idempotency check", exc_info=True)
+            logger.error(
+                "Unexpected DynamoDB error during idempotency check", exc_info=True
+            )
             raise

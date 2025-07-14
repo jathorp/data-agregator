@@ -11,6 +11,7 @@ Key design choices
   `BatchProcessingError`. That means we no longer need the `try/except` guard
   nor the manual translation of `failed_messages`.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -44,6 +45,7 @@ from .exceptions import (
 )
 from .schemas import S3EventRecord
 
+
 # ─────────────────────────────────────────────────────────────
 #  Configuration
 # ─────────────────────────────────────────────────────────────
@@ -76,13 +78,16 @@ CONFIG = EnvConfig()
 # ─────────────────────────────────────────────────────────────
 #  Observability primitives
 # ─────────────────────────────────────────────────────────────
-logger = Logger(service="data-aggregator", level=CONFIG.log_level, log_uncaught_exceptions=True)
+logger = Logger(
+    service="data-aggregator", level=CONFIG.log_level, log_uncaught_exceptions=True
+)
 tracer = Tracer(service="data-aggregator")
 metrics = Metrics(namespace="DataAggregator", service="data-aggregator")
 metrics.set_default_dimensions(environment=CONFIG.environment)
 
 _S3 = boto3.client("s3")
 _DYNAMODB = boto3.client("dynamodb")
+
 
 # ─────────────────────────────────────────────────────────────
 #  Dependency container
@@ -101,6 +106,7 @@ class Dependencies:
             table_name=CONFIG.idempotency_table,
             ttl_attribute=CONFIG.dynamodb_ttl_attribute,
         )
+
 
 # ─────────────────────────────────────────────────────────────
 #  Stage‑2 bundling helper
@@ -137,13 +143,16 @@ def _process_successful_batch(
     metrics.add_metric("RecordsInBundle", MetricUnit.Count, len(successful_records))
     logger.info("Bundle staged", extra={"key": archive_key})
 
+
 # ─────────────────────────────────────────────────────────────
 #  Lambda entry point
 # ─────────────────────────────────────────────────────────────
 @logger.inject_lambda_context(log_event=True)
 @tracer.capture_lambda_handler
 @metrics.log_metrics(capture_cold_start_metric=True)
-def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailureResponse:
+def handler(
+    event: Dict[str, Any], context: LambdaContext
+) -> PartialItemFailureResponse:
     """Main Lambda handler (SQS batch)."""
     if not event.get("Records"):
         logger.info("No records, nothing to do")
@@ -200,11 +209,16 @@ def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailure
     with processor(records=event["Records"], handler=record_handler):
         processor.process()
 
-    batch_failures: List[PartialItemFailures] = processor.response()["batchItemFailures"]
+    batch_failures: List[PartialItemFailures] = processor.response()[
+        "batchItemFailures"
+    ]
 
     logger.debug(
         "Stage‑1 complete",
-        extra={"success_count": len(successful_records), "failure_count": len(batch_failures)},
+        extra={
+            "success_count": len(successful_records),
+            "failure_count": len(batch_failures),
+        },
     )
 
     # -----------------------------------------------------
@@ -214,7 +228,9 @@ def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailure
         try:
             _process_successful_batch(successful_records, context, deps)
         except SQSBatchProcessingError:
-            logger.error("Bundling failed — flagging processed items for retry", exc_info=True)
+            logger.error(
+                "Bundling failed — flagging processed items for retry", exc_info=True
+            )
             for msg_id in processed_message_ids:
                 batch_failures.append({"itemIdentifier": msg_id})
 

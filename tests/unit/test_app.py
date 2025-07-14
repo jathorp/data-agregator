@@ -22,6 +22,7 @@ with patch("boto3.client"):
 
 # --- Fixtures ---
 
+
 @pytest.fixture
 def mock_lambda_context():
     """Provides a mock LambdaContext object."""
@@ -29,22 +30,29 @@ def mock_lambda_context():
     context.aws_request_id = "test-request-id-123"
     return context
 
+
 # --- Helper ---
+
 
 def create_sqs_event(*records):
     """Creates a full SQS event from one or more record dictionaries."""
     return {"Records": list(records)}
+
 
 def create_sqs_record_dict(message_id, key, size):
     """Creates a raw SQS record dictionary."""
     s3_event_body = {"Records": [{"s3": {"object": {"key": key, "size": size}}}]}
     return {"messageId": message_id, "body": json.dumps(s3_event_body)}
 
+
 # --- New tests for the main handler ---
+
 
 @patch("src.data_aggregator.app._process_successful_batch")
 @patch("src.data_aggregator.app.Dependencies")
-def test_handler_new_records_are_bundled(mock_deps, mock_process_batch, mock_lambda_context):
+def test_handler_new_records_are_bundled(
+    mock_deps, mock_process_batch, mock_lambda_context
+):
     """
     Tests the happy path where new records are found and sent for bundling.
     """
@@ -69,15 +77,20 @@ def test_handler_new_records_are_bundled(mock_deps, mock_process_batch, mock_lam
     # Check that no failures were reported to SQS
     assert result["batchItemFailures"] == []
 
+
 @patch("src.data_aggregator.app._process_successful_batch")
 @patch("src.data_aggregator.app.Dependencies")
-def test_handler_duplicates_are_skipped(mock_deps, mock_process_batch, mock_lambda_context):
+def test_handler_duplicates_are_skipped(
+    mock_deps, mock_process_batch, mock_lambda_context
+):
     """
     Tests that if all records are duplicates, the bundling process is not triggered.
     """
     # Arrange
     # Mock the DynamoDB client to report that all keys are duplicates
-    mock_deps.return_value.dynamodb_client.check_and_set_idempotency.return_value = False
+    mock_deps.return_value.dynamodb_client.check_and_set_idempotency.return_value = (
+        False
+    )
     event = create_sqs_event(create_sqs_record_dict("msg1", "file1.txt", 100))
 
     # Act
@@ -88,9 +101,12 @@ def test_handler_duplicates_are_skipped(mock_deps, mock_process_batch, mock_lamb
     mock_process_batch.assert_not_called()
     assert result["batchItemFailures"] == []
 
+
 @patch("src.data_aggregator.app._process_successful_batch")
 @patch("src.data_aggregator.app.Dependencies")
-def test_handler_malformed_message_is_reported_as_failure(mock_deps, mock_process_batch, mock_lambda_context):
+def test_handler_malformed_message_is_reported_as_failure(
+    mock_deps, mock_process_batch, mock_lambda_context
+):
     """
     Tests that a record with a non-JSON body is correctly marked as a failure.
     """
@@ -105,9 +121,12 @@ def test_handler_malformed_message_is_reported_as_failure(mock_deps, mock_proces
     assert len(result["batchItemFailures"]) == 1
     assert result["batchItemFailures"][0]["itemIdentifier"] == "bad_msg"
 
+
 @patch("src.data_aggregator.app._process_successful_batch")
 @patch("src.data_aggregator.app.Dependencies")
-def test_handler_batch_failure_retries_successful_items(mock_deps, mock_process_batch, mock_lambda_context):
+def test_handler_batch_failure_retries_successful_items(
+    mock_deps, mock_process_batch, mock_lambda_context
+):
     """
     Tests that if bundling fails, the records that were successfully processed
     in stage 1 are returned to SQS for a retry.

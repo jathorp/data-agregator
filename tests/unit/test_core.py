@@ -1,188 +1,232 @@
 # tests/unit/test_core.py
 
-import gzip
 import hashlib
-from io import BytesIO
+import io
+import tarfile
 from unittest.mock import MagicMock, patch
 
 import pytest
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
-from src.data_aggregator.core import create_gzipped_bundle_stream, process_and_stage_batch
+from src.data_aggregator.core import (
+    create_tar_gz_bundle_stream,
+    process_and_stage_batch,
+    _sanitize_s3_key,
+)
+from src.data_aggregator.exceptions import BundlingTimeoutError
 
 
-# --- FIX: Add a reusable fixture for the mock Lambda context ---
 @pytest.fixture
 def mock_lambda_context() -> MagicMock:
-    """Provides a mock LambdaContext object for tests."""
+    """Provides a mock LambdaContext object that passes timeout checks."""
     context = MagicMock(spec=LambdaContext)
-    # Ensure the timeout check always passes by returning a large number of milliseconds
     context.get_remaining_time_in_millis.return_value = 300_000
     return context
 
 
-@patch("src.data_aggregator.core.create_gzipped_bundle_stream")
+# --- High-Level Orchestration Tests ---
+
+
+@patch("src.data_aggregator.core.create_tar_gz_bundle_stream")
 def test_process_and_stage_batch_happy_path(mock_create_bundle, mock_lambda_context):
-    """
-    Tests the orchestration logic of process_and_stage_batch, verifying the
-    new 'upload then copy' pattern.
-    """
     # 1. ARRANGE
     mock_s3_client = MagicMock()
-    mock_bundle_file = MagicMock(spec=BytesIO)
-    mock_content_hash = "fake_hash_123"
+    mock_bundle_file = MagicMock(spec=io.BytesIO)
+    mock_content_hash = "fake_tar_hash_456"
     mock_create_bundle.return_value.__enter__.return_value = (
         mock_bundle_file,
         mock_content_hash,
     )
-
-    test_records = [{"s3": {"bucket": {"name": "test-bucket"}, "object": {"key": "file1.txt"}}}]
-    test_archive_bucket = "test-archive"
-    test_distribution_bucket = "test-distribution"
-    test_archive_key = "bundle-123.gz"
+    test_records = [
+        {"s3": {"bucket": {"name": "b"}, "object": {"key": "f1.txt", "size": 10}}}
+    ]
+    archive_bucket, distribution_bucket, archive_key = "a-b", "d-b", "key.tar.gz"
 
     # 2. ACT
-    # --- FIX: Pass the required mock_lambda_context ---
-    content_hash = process_and_stage_batch(
+    process_and_stage_batch(
         records=test_records,
         s3_client=mock_s3_client,
-        archive_bucket=test_archive_bucket,
-        distribution_bucket=test_distribution_bucket,
-        archive_key=test_archive_key,
+        archive_bucket=archive_bucket,
+        distribution_bucket=distribution_bucket,
+        archive_key=archive_key,
         context=mock_lambda_context,
     )
 
     # 3. ASSERT
-    # --- FIX: Update assertions to match the new 'upload then copy' logic ---
-    mock_create_bundle.assert_called_once_with(mock_s3_client, test_records, context=mock_lambda_context)
-
-    # Assert the initial upload to the archive bucket
-    mock_s3_client.upload_gzipped_bundle.assert_called_once_with(
-        bucket=test_archive_bucket, key=test_archive_key, file_obj=mock_bundle_file, content_hash=mock_content_hash
+    # FIX: The 'context' argument is positional, not a keyword.
+    mock_create_bundle.assert_called_once_with(
+        mock_s3_client, test_records, mock_lambda_context
     )
-
-    # Assert the S3 copy operation to the distribution bucket
-    mock_s3_client.copy_bundle.assert_called_once_with(
-        source_bucket=test_archive_bucket, source_key=test_archive_key,
-        dest_bucket=test_distribution_bucket, dest_key=test_archive_key
-    )
-
-    # The file.seek() is now an implementation detail of the (mocked) create_bundle
-    # function, so we no longer assert it here.
-
-    assert content_hash == mock_content_hash
-
-def test_create_gzipped_bundle_stream_creates_valid_bundle(mock_lambda_context):
-    """
-    Tests that the create_gzipped_bundle_stream function correctly:
-    1. Creates a valid Gzip stream.
-    2. Includes all file content with headers/footers.
-    3. Calculates the correct SHA-256 hash of the uncompressed content.
-    """
-    # 1. ARRANGE
-    mock_s3_client = MagicMock()
-    file1_content = b"This is the first file."
-    file2_content = b"This is the second file."
-
-    mock_stream1 = MagicMock()
-    mock_stream1.iter_chunks.return_value = [file1_content]
-    mock_stream2 = MagicMock()
-    mock_stream2.iter_chunks.return_value = [file2_content]
-
-    # --- FIX: Set the side_effect on the method call itself, not on __enter__ ---
-    mock_s3_client.get_file_content_stream.side_effect = [
-        mock_stream1,
-        mock_stream2,
-    ]
-
-    records = [
-        {"s3": {"bucket": {"name": "test-bucket"}, "object": {"key": "file1.txt"}}},
-        {"s3": {"bucket": {"name": "test-bucket"}, "object": {"key": "file2.txt"}}},
-    ]
-
-    # The original manual hash calculation was correct.
-    expected_hasher = hashlib.sha256()
-    expected_hasher.update(b"--- BEGIN file1.txt ---\n")
-    expected_hasher.update(file1_content)
-    expected_hasher.update(b"\n--- END file1.txt ---\n")
-    expected_hasher.update(b"--- BEGIN file2.txt ---\n")
-    expected_hasher.update(file2_content)
-    expected_hasher.update(b"\n--- END file2.txt ---\n")
-    expected_hash = expected_hasher.hexdigest()
-
-    # 2. ACT
-    with create_gzipped_bundle_stream(mock_s3_client, records, mock_lambda_context) as (bundle_file, content_hash):
-        bundle_content = bundle_file.read()
-
-    # 3. ASSERT
-    decompressed_content = gzip.decompress(bundle_content)
-
-    # 3a. Content and hash must exactly match our hand-rolled expectation
-    expected_content = (
-        b"--- BEGIN file1.txt ---\n"
-        b"This is the first file."
-        b"\n--- END file1.txt ---\n"
-        b"--- BEGIN file2.txt ---\n"
-        b"This is the second file."
-        b"\n--- END file2.txt ---\n"
-    )
-    assert decompressed_content == expected_content
-    assert content_hash == expected_hash
-
-    # 3b. The S3 client should have been asked for each object once and only once, in order
-    assert mock_s3_client.get_file_content_stream.call_count == 2
-    mock_s3_client.get_file_content_stream.assert_has_calls(
-        [
-            (("test-bucket", "file1.txt"),),  # positional-only args
-            (("test-bucket", "file2.txt"),),
-        ]
-    )
-
+    mock_s3_client.upload_gzipped_bundle.assert_called_once()
+    mock_s3_client.copy_bundle.assert_called_once()
 
 
 def test_process_and_stage_batch_raises_error_for_empty_records(mock_lambda_context):
-    """
-    Verifies that the function raises a ValueError if called with an empty list of records.
-    """
+    """Verifies ValueError for an empty list of records."""
     # 1. ARRANGE
-    mock_s3_client = MagicMock()
+    # No complex arrangement needed for this test.
 
-    # 2. ACT & ASSERT
+    # 2. ACT & 3. ASSERT
     with pytest.raises(ValueError, match="Cannot process an empty batch."):
-        # --- FIX: Pass the required mock_lambda_context ---
-        process_and_stage_batch(
-            records=[],
-            s3_client=mock_s3_client,
-            archive_bucket="any-bucket",
-            distribution_bucket="any-distribution-bucket",
-            archive_key="any-key",
-            context=mock_lambda_context,
-        )
+        process_and_stage_batch([], MagicMock(), "a", "d", "k", mock_lambda_context)
 
-def test_create_gzipped_bundle_stream_handles_empty_file(mock_lambda_context):
-    """
-    Verifies the bundler correctly handles a 0-byte file from S3.
-    """
+
+# --- Core Logic and Security Tests ---
+
+
+def test_create_tar_gz_bundle_stream_creates_valid_archive(mock_lambda_context):
+    """Tests the happy path for creating a valid archive."""
     # 1. ARRANGE
     mock_s3_client = MagicMock()
-    mock_empty_stream = MagicMock()
-    mock_empty_stream.iter_chunks.return_value = []
-    mock_s3_client.get_file_content_stream.return_value.__enter__.return_value = mock_empty_stream
-
+    file1_content, file2_content = b"file1", b"file2"
+    mock_s3_client.get_file_content_stream.side_effect = [
+        io.BytesIO(file1_content),
+        io.BytesIO(file2_content),
+    ]
     records = [
-        {"s3": {"bucket": {"name": "test-bucket"}, "object": {"key": "empty.txt"}}},
+        {
+            "s3": {
+                "bucket": {"name": "b"},
+                "object": {"key": "f1.txt", "size": len(file1_content)},
+            }
+        },
+        {
+            "s3": {
+                "bucket": {"name": "b"},
+                "object": {"key": "d/f2.log", "size": len(file2_content)},
+            }
+        },
     ]
 
-    expected_hasher = hashlib.sha256()
-    expected_hasher.update(b"--- BEGIN empty.txt ---\n")
-    expected_hasher.update(b"\n--- END empty.txt ---\n")
-    expected_hash = expected_hasher.hexdigest()
-
     # 2. ACT
-    # --- FIX: Pass the required mock_lambda_context ---
-    with create_gzipped_bundle_stream(mock_s3_client, records, mock_lambda_context) as (bundle_file, content_hash):
-        decompressed_content = gzip.decompress(bundle_file.read())
+    with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context) as (
+        f,
+        returned_hash,
+    ):
+        bundle_content = f.read()
 
     # 3. ASSERT
-    assert content_hash == expected_hash
-    assert decompressed_content == b"--- BEGIN empty.txt ---\n\n--- END empty.txt ---\n"
+    actual_hash = hashlib.sha256(bundle_content).hexdigest()
+    assert returned_hash == actual_hash
+    with (
+        io.BytesIO(bundle_content) as bio,
+        tarfile.open(fileobj=bio, mode="r:gz") as tar,
+    ):
+        assert sorted(tar.getnames()) == sorted(["d/f2.log", "f1.txt"])
+        assert tar.extractfile("f1.txt").read() == file1_content
+
+
+@pytest.mark.parametrize(
+    "original_key, expected_safe_key",
+    [
+        # ─── Traversal & absolute paths ────────────────────────────────────────────
+        ("foo/../../etc/passwd", None),  # Up-level traversal ⇒ reject
+        ("/etc/passwd", "etc/passwd"),  # Leading slash becomes relative
+        (
+            "C:\\Windows\\System32.dll",
+            "Windows/System32.dll",
+        ),  # Strip drive + backslashes
+        (
+            "C:/Windows/System32.dll",
+            "Windows/System32.dll",
+        ),  # Same with forward slashes
+        ("foo/./bar//baz.txt", "foo/bar/baz.txt"),  # Collapsed ./ and // segments
+        ("foo\\..\\bar.txt", "bar.txt"),  # Mixed slashes with traversal
+        # ─── Benign oddities ───────────────────────────────────────────────────────
+        ("my folder/my report.docx", "my folder/my report.docx"),  # Spaces
+        ("data/folder/", "data/folder"),  # Trailing slash (“folder object”)
+        ("你好/世界.txt", "你好/世界.txt"),  # UTF-8
+        ("a///b//c.txt", "a/b/c.txt"),  # Multiple consecutive slashes
+        ("aux", "aux"),  # Windows device name – allowed
+        ("CON.txt", "CON.txt"),  # Another device name
+        # ─── Control / percent-encoded / dot keys ─────────────────────────────────
+        ("data/file\0name.txt", None),  # NUL byte ⇒ reject
+        ("bad\rname.txt", "bad\rname.txt"),  # Other control char – currently allowed
+        (
+            "foo/%2e%2e/%2e%2e/passwd",
+            "foo/%2e%2e/%2e%2e/passwd",
+        ),  # Encoded “..” left verbatim
+        ("", None),  # Empty key ⇒ reject
+        (".", None),  # Just "." ⇒ reject
+        ("./", None),  # "./" with slash ⇒ reject
+        ("././", None),  # Repeated "./" ⇒ reject
+        # ─── Pathological length / trailing chars ─────────────────────────────────
+        ("a" * 1025 + ".txt", "a" * 1025 + ".txt"),  # >1024-byte key (S3 would reject)
+        ("trickyfile.txt. ", "trickyfile.txt. "),  # Trailing dot/space (Windows quirk)
+        # ─── Unicode-normalisation twins (both allowed, distinct) ─────────────────
+        ("e\u0301.txt", "e\u0301.txt"),  # "é" composed with accent
+        ("é.txt", "é.txt"),  # NFC-composed form
+    ],
+)
+def test_sanitize_s3_key(original_key, expected_safe_key):
+    """Tests the _sanitize_s3_key helper function in isolation."""
+    # 2. ACT
+    result = _sanitize_s3_key(original_key)
+
+    # 3. ASSERT
+    assert result == expected_safe_key
+
+
+# --- Edge Case and Robustness Tests ---
+
+
+def test_create_tar_gz_bundle_stream_handles_empty_file(mock_lambda_context):
+    """Verifies the bundler correctly handles a 0-byte file."""
+    # 1. ARRANGE
+    mock_s3_client = MagicMock()
+    mock_s3_client.get_file_content_stream.return_value = io.BytesIO(b"")
+    records = [
+        {"s3": {"bucket": {"name": "b"}, "object": {"key": "empty.txt", "size": 0}}}
+    ]
+
+    # 2. ACT
+    with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context) as (
+        f,
+        _,
+    ):
+        bundle_content = f.read()
+
+    # 3. ASSERT
+    with (
+        io.BytesIO(bundle_content) as bio,
+        tarfile.open(fileobj=bio, mode="r:gz") as tar,
+    ):
+        member = tar.getmember("empty.txt")
+        assert member.size == 0
+
+
+def test_create_tar_gz_bundle_stream_raises_on_timeout(mock_lambda_context):
+    """Verifies the timeout guard aborts processing."""
+    # 1. ARRANGE
+    mock_s3_client = MagicMock()
+    records = [
+        {"s3": {"bucket": {"name": "b"}, "object": {"key": "f0.txt", "size": 7}}}
+    ]
+    mock_lambda_context.get_remaining_time_in_millis.return_value = 5000
+
+    # 2. ACT & 3. ASSERT
+    with pytest.raises(BundlingTimeoutError):
+        with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context):
+            pass  # This block should not be reached
+
+    mock_s3_client.get_file_content_stream.assert_not_called()
+
+
+def test_create_tar_gz_bundle_stream_handles_size_mismatch(mock_lambda_context):
+    """
+    Verifies the bundler skips a file if its actual content size does not
+    match the size reported in the S3 event metadata.
+    """
+    # 1. ARRANGE
+    mock_s3_client = MagicMock()
+    mock_s3_client.get_file_content_stream.return_value = io.BytesIO(b"ten bytes!")
+    records = [{"s3": {"bucket": {"name": "b"}, "object": {"key": "bad_size.txt", "size": 100}}}]
+
+    # 2. ACT
+    with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context) as (f, _):
+        bundle_content = f.read()
+
+    # 3. ASSERT
+    # FIX: The file should now be skipped entirely, resulting in an empty bundle.
+    with io.BytesIO(bundle_content) as bio, tarfile.open(fileobj=bio, mode="r:gz") as tar:
+        assert not tar.getmembers(), "The bundle should be empty after skipping the bad file."

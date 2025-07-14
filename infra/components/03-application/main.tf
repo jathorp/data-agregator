@@ -33,7 +33,10 @@ resource "aws_iam_policy" "aggregator_lambda_policy" {
       {
         Action   = "s3:GetObject"
         Effect   = "Allow"
-        Resource = "${data.terraform_remote_state.stateful.outputs.landing_bucket_arn}/*"
+        Resource = [
+          "${data.terraform_remote_state.stateful.outputs.archive_bucket_arn}/*",
+          "${data.terraform_remote_state.stateful.outputs.distribution_bucket_arn}/*" # Added permission
+        ]
       },
       {
         Action = ["s3:PutObject"]

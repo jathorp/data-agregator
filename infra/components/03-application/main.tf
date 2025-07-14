@@ -69,9 +69,35 @@ resource "aws_iam_role_policy_attachment" "aggregator_lambda_attach" {
 
 resource "aws_security_group" "aggregator_lambda_sg" {
   name        = "${var.lambda_function_name}-sg"
-  description = "Security group for the aggregator Lambda. No egress is required."
+  description = "Allows Lambda outbound access to required AWS service endpoints."
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
   tags        = local.common_tags
+
+  # Egress rules based on the Principle of Least Privilege.
+
+  egress {
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    prefix_list_ids = [data.aws_prefix_list.s3.id]
+    description     = "Allow outbound HTTPS to S3 Gateway Endpoint"
+  }
+
+  egress {
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    prefix_list_ids = [data.aws_prefix_list.dynamodb.id]
+    description     = "Allow outbound HTTPS to DynamoDB Gateway Endpoint"
+  }
+
+  egress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [data.terraform_remote_state.network.outputs.vpc_cidr_block]
+    description = "Allow outbound HTTPS to Interface Endpoints (SQS, KMS) within the VPC"
+  }
 }
 
 # -----------------------------------------------------------------------------
@@ -103,7 +129,7 @@ resource "aws_lambda_function" "aggregator" {
       ARCHIVE_BUCKET_NAME      = data.terraform_remote_state.stateful.outputs.archive_bucket_id
       DISTRIBUTION_BUCKET_NAME = data.terraform_remote_state.stateful.outputs.distribution_bucket_id # Added
       IDEMPOTENCY_TABLE_NAME   = data.terraform_remote_state.stateful.outputs.idempotency_table_name
-      LOG_LEVEL                = "INFO"
+      LOG_LEVEL                = "DEBUG"
       IDEMPOTENCY_TTL_DAYS     = var.idempotency_ttl_days
     }
   }

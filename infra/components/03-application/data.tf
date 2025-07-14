@@ -24,3 +24,13 @@ data "terraform_remote_state" "stateful" {
 data "aws_region" "current" {}
 
 data "aws_caller_identity" "current" {}
+
+# --- NEW: Data sources to get the prefix lists for S3 and DynamoDB ---
+
+data "aws_prefix_list" "s3" {
+  name = "com.amazonaws.${data.aws_region.current.name}.s3"
+}
+
+data "aws_prefix_list" "dynamodb" {
+  name = "com.amazonaws.${data.aws_region.current.name}.dynamodb"
+}

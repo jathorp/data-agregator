@@ -12,7 +12,8 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from src.data_aggregator.core import (
     create_tar_gz_bundle_stream,
     process_and_stage_batch,
-    _sanitize_s3_key, _buffer_and_validate,
+    _sanitize_s3_key,
+    _buffer_and_validate,
 )
 from src.data_aggregator.exceptions import BundlingTimeoutError
 
@@ -41,25 +42,33 @@ def test_process_and_stage_batch_happy_path(mock_create_bundle, mock_lambda_cont
     test_records = [
         {"s3": {"bucket": {"name": "b"}, "object": {"key": "f1.txt", "size": 10}}}
     ]
-    archive_bucket, distribution_bucket, archive_key = "a-b", "d-b", "key.tar.gz"
+    # The function now only needs the distribution bucket and a bundle key
+    distribution_bucket, bundle_key = "d-b", "key.tar.gz"
 
     # 2. ACT
+    # Call the simplified function with the new arguments
     process_and_stage_batch(
         records=test_records,
         s3_client=mock_s3_client,
-        archive_bucket=archive_bucket,
         distribution_bucket=distribution_bucket,
-        archive_key=archive_key,
+        bundle_key=bundle_key,
         context=mock_lambda_context,
     )
 
     # 3. ASSERT
-    # FIX: The 'context' argument is positional, not a keyword.
+    # Assert that the bundler was called correctly
     mock_create_bundle.assert_called_once_with(
         mock_s3_client, test_records, mock_lambda_context
     )
-    mock_s3_client.upload_gzipped_bundle.assert_called_once()
-    mock_s3_client.copy_bundle.assert_called_once()
+    # Assert that ONLY the single upload method was called with the correct args
+    mock_s3_client.upload_gzipped_bundle.assert_called_once_with(
+        bucket=distribution_bucket,
+        key=bundle_key,
+        file_obj=mock_bundle_file,
+        content_hash=mock_content_hash,
+    )
+    # Assert that the copy method is NEVER called
+    mock_s3_client.copy_bundle.assert_not_called()
 
 
 def test_process_and_stage_batch_raises_error_for_empty_records(mock_lambda_context):
@@ -67,10 +76,17 @@ def test_process_and_stage_batch_raises_error_for_empty_records(mock_lambda_cont
     # 1. ARRANGE
     # No complex arrangement needed for this test.
 
-    # 2. ACT & 3. ASSERT
+    # ACT & ASSERT
     with pytest.raises(ValueError, match="Cannot process an empty batch."):
-        process_and_stage_batch([], MagicMock(), "a", "d", "k", mock_lambda_context)
-
+        # Correctly call the function with its new 5-argument signature.
+        # The values don't matter much since it will fail on the empty list first.
+        process_and_stage_batch(
+            records=[],
+            s3_client=MagicMock(),
+            distribution_bucket="any-dist-bucket",
+            bundle_key="any-bundle-key",
+            context=mock_lambda_context,
+        )
 
 # --- Core Logic and Security Tests ---
 
@@ -221,16 +237,31 @@ def test_create_tar_gz_bundle_stream_handles_size_mismatch(mock_lambda_context):
     # 1. ARRANGE
     mock_s3_client = MagicMock()
     mock_s3_client.get_file_content_stream.return_value = io.BytesIO(b"ten bytes!")
-    records = [{"s3": {"bucket": {"name": "b"}, "object": {"key": "bad_size.txt", "size": 100}}}]
+    records = [
+        {
+            "s3": {
+                "bucket": {"name": "b"},
+                "object": {"key": "bad_size.txt", "size": 100},
+            }
+        }
+    ]
 
     # 2. ACT
-    with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context) as (f, _):
+    with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context) as (
+        f,
+        _,
+    ):
         bundle_content = f.read()
 
     # 3. ASSERT
     # FIX: The file should now be skipped entirely, resulting in an empty bundle.
-    with io.BytesIO(bundle_content) as bio, tarfile.open(fileobj=bio, mode="r:gz") as tar:
-        assert not tar.getmembers(), "The bundle should be empty after skipping the bad file."
+    with (
+        io.BytesIO(bundle_content) as bio,
+        tarfile.open(fileobj=bio, mode="r:gz") as tar,
+    ):
+        assert not tar.getmembers(), (
+            "The bundle should be empty after skipping the bad file."
+        )
 
 
 def test_buffer_and_validate_ok():

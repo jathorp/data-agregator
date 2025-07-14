@@ -64,7 +64,7 @@ class S3Client:
                 {"ServerSideEncryption": "aws:kms", "SSEKMSKeyId": self._kms_key_id}
             )
         logger.info(
-            "Uploading bundle (archive)",
+            "Uploading bundle",
             extra={"bucket": bucket, "key": key, "kms_enabled": bool(self._kms_key_id)},
         )
         self._client.upload_fileobj(
@@ -72,39 +72,6 @@ class S3Client:
         )
         logger.debug(
             "Upload (PUT) completed successfully", extra={"bucket": bucket, "key": key}
-        )
-
-    def copy_bundle(
-        self, source_bucket: str, source_key: str, dest_bucket: str, dest_key: str
-    ):
-        """
-        Uses the efficient S3 CopyObject API to duplicate a bundle.
-        This is faster and cheaper than downloading and re-uploading.
-        """
-        logger.info(
-            "Copying bundle (distribution)",
-            extra={
-                "source": f"{source_bucket}/{source_key}",
-                "dest": f"{dest_bucket}/{dest_key}",
-            },
-        )
-        copy_source: CopySourceTypeDef = {"Bucket": source_bucket, "Key": source_key}
-        extra_args = {}
-        if self._kms_key_id:
-            extra_args = {
-                "ServerSideEncryption": "aws:kms",
-                "SSEKMSKeyId": self._kms_key_id,
-            }
-        self._client.copy_object(
-            Bucket=dest_bucket,
-            Key=dest_key,
-            CopySource=copy_source,
-            MetadataDirective="COPY",  # Explicitly copy metadata for maintainability
-            **extra_args,
-        )
-        logger.debug(
-            "CopyObject completed successfully",
-            extra={"dest_bucket": dest_bucket, "dest_key": dest_key},
         )
 
 

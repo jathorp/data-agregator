@@ -54,7 +54,6 @@ class EnvConfig:
     """Fail‑fast wrapper around environment variables."""
 
     idempotency_table: str = os.environ["IDEMPOTENCY_TABLE_NAME"]
-    archive_bucket: str = os.environ["ARCHIVE_BUCKET_NAME"]
     distribution_bucket: str = os.environ["DISTRIBUTION_BUCKET_NAME"]
 
     idempotency_ttl_days: int = int(os.environ.get("IDEMPOTENCY_TTL_DAYS", "7"))
@@ -117,7 +116,7 @@ def _process_successful_batch(
     context: LambdaContext,
     deps: Dependencies,
 ) -> None:
-    """Run pre‑flight checks then call `process_and_stage_batch`."""
+    """Run pre-flight checks then call `process_and_stage_batch`."""
     logger.debug("Stage‑2 processing", extra={"record_count": len(successful_records)})
 
     total_input = sum(r["s3"]["object"]["size"] for r in successful_records)
@@ -127,27 +126,27 @@ def _process_successful_batch(
     if context.get_remaining_time_in_millis() < 8_000:
         raise BundlingTimeoutError("Not enough time left to bundle")
 
-    archive_key = f"bundle-{context.aws_request_id}.gz"
+    # Rename the variable for clarity and to fix the NameError
+    bundle_key = f"bundle-{context.aws_request_id}.gz"
 
     with tracer.provider.in_subsegment("process_and_stage_bundle_subsegment"):
         process_and_stage_batch(
             records=successful_records,
             s3_client=deps.s3_client,
-            archive_bucket=CONFIG.archive_bucket,
             distribution_bucket=CONFIG.distribution_bucket,
-            archive_key=archive_key,
+            bundle_key=bundle_key,
             context=context,
         )
 
     metrics.add_metric("BundlesCreated", MetricUnit.Count, 1)
     metrics.add_metric("RecordsInBundle", MetricUnit.Count, len(successful_records))
-    logger.info("Bundle staged", extra={"key": archive_key})
+    logger.info("Bundle staged to distribution bucket", extra={"key": bundle_key})
 
 
 # ─────────────────────────────────────────────────────────────
 #  Lambda entry point
 # ─────────────────────────────────────────────────────────────
-@logger.inject_lambda_context(log_event=True)
+@logger.inject_lambda_context(log_event=False)
 @tracer.capture_lambda_handler
 @metrics.log_metrics(capture_cold_start_metric=True)
 def handler(

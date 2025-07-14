@@ -129,26 +129,6 @@ def test_s3_client_upload_gzipped_bundle_with_kms(
     )
 
 
-def test_s3_client_copy_bundle(s3_client, mock_boto_s3_client):
-    """
-    Verifies the new copy_bundle method calls copy_object with correct arguments.
-    """
-    # Arrange
-    source_bucket, source_key = "source-bucket", "source-key.gz"
-    dest_bucket, dest_key = "dest-bucket", "dest-key.gz"
-
-    # Act
-    s3_client.copy_bundle(source_bucket, source_key, dest_bucket, dest_key)
-
-    # Assert
-    mock_boto_s3_client.copy_object.assert_called_once_with(
-        Bucket=dest_bucket,
-        Key=dest_key,
-        CopySource={"Bucket": source_bucket, "Key": source_key},
-        MetadataDirective="COPY",
-    )
-
-
 # -----------------------------------------------------------------------------
 # Tests for DynamoDBClient
 # -----------------------------------------------------------------------------

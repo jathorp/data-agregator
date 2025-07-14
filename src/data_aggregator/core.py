@@ -38,7 +38,7 @@ TIMEOUT_GUARD_THRESHOLD_MS: int = 10_000  # Bail out when < 10s remaining
 def _sanitize_s3_key(key: str) -> Optional[str]:
     """Return a safe, relative POSIX path or None if the key is disallowed."""
     try:
-        if any(ord(c) < 0x1f for c in key) or len(key.encode("utf-8")) > 1024:
+        if any(ord(c) < 0x1F for c in key) or len(key.encode("utf-8")) > 1024:
             return None
         key_no_drive = re.sub(r"^[a-zA-Z]:", "", key)
         path_with_fwd_slashes = key_no_drive.replace("\\", "/")
@@ -74,7 +74,7 @@ def _buffer_and_validate(
         tmp.close()
         return None
 
-    tmp.seek(0)                          # rewind for reading
+    tmp.seek(0)  # rewind for reading
     return cast(BinaryIO, tmp), copied
 
 
@@ -99,9 +99,11 @@ class HashingFileWrapper(io.BufferedIOBase):
     def close(self) -> None:
         pass  # The parent context manager is responsible for closing.
 
-    def writable(self) -> bool: return True
+    def writable(self) -> bool:
+        return True
 
-    def seekable(self) -> bool: return True
+    def seekable(self) -> bool:
+        return True
 
     def hexdigest(self) -> str:
         return self._hasher.hexdigest()
@@ -113,7 +115,7 @@ class HashingFileWrapper(io.BufferedIOBase):
 # --- Core Bundling Routine ---
 @contextmanager
 def create_tar_gz_bundle_stream(
-        s3_client: S3Client, records: List[S3EventRecord], context: LambdaContext
+    s3_client: S3Client, records: List[S3EventRecord], context: LambdaContext
 ) -> Iterator[Tuple[BinaryIO, str]]:
     """Stream-creates a compressed tarball from a set of S3 objects."""
     output_spool_file: BinaryIO = SpooledTemporaryFile(  # type: ignore[assignment]
@@ -123,11 +125,15 @@ def create_tar_gz_bundle_stream(
 
     try:
         with tarfile.open(
-                mode="w:gz", fileobj=cast(BinaryIO, hashing_writer), format=tarfile.PAX_FORMAT
+            mode="w:gz",
+            fileobj=cast(BinaryIO, hashing_writer),
+            format=tarfile.PAX_FORMAT,
         ) as tar:
             for record in records:
                 if context.get_remaining_time_in_millis() < TIMEOUT_GUARD_THRESHOLD_MS:
-                    raise BundlingTimeoutError("Timeout threshold reached mid-bundling.")
+                    raise BundlingTimeoutError(
+                        "Timeout threshold reached mid-bundling."
+                    )
 
                 original_key = record["s3"]["object"]["key"]
                 safe_key = _sanitize_s3_key(original_key)
@@ -143,7 +149,9 @@ def create_tar_gz_bundle_stream(
                     buffered_result = _buffer_and_validate(stream, metadata_size)
 
                 if buffered_result is None:
-                    logger.warning("Skipping due to size mismatch.", extra={"key": original_key})
+                    logger.warning(
+                        "Skipping due to size mismatch.", extra={"key": original_key}
+                    )
                     continue
 
                 content_buffer, actual_size = buffered_result
@@ -168,21 +176,30 @@ def create_tar_gz_bundle_stream(
 
 # --- High-Level Orchestrator ---
 def process_and_stage_batch(
-        records: List[S3EventRecord], s3_client: S3Client, archive_bucket: str,
-        distribution_bucket: str, archive_key: str, context: LambdaContext
+    records: List[S3EventRecord],
+    s3_client: S3Client,
+    distribution_bucket: str,
+    bundle_key: str,
+    context: LambdaContext,
 ) -> str:
-    """Upload the freshly-built bundle once, copy it to the second bucket."""
+    """Creates a bundle and uploads it to the S3 distribution bucket."""
     if not records:
         raise ValueError("Cannot process an empty batch.")
 
-    with create_tar_gz_bundle_stream(s3_client, records, context) as (bundle, sha256_hash):
+    with create_tar_gz_bundle_stream(s3_client, records, context) as (
+        bundle,
+        sha256_hash,
+    ):
+        # The Lambda's only responsibility is to write to the distribution bucket.
         s3_client.upload_gzipped_bundle(
-            bucket=archive_bucket, key=archive_key, file_obj=bundle, content_hash=sha256_hash
-        )
-        s3_client.copy_bundle(
-            source_bucket=archive_bucket, source_key=archive_key,
-            dest_bucket=distribution_bucket, dest_key=archive_key
+            bucket=distribution_bucket,
+            key=bundle_key,
+            file_obj=bundle,
+            content_hash=sha256_hash,
         )
 
-    logger.info("Successfully staged bundle", extra={"key": archive_key, "hash": sha256_hash})
+    logger.info(
+        "Successfully staged bundle to distribution bucket",
+        extra={"key": bundle_key, "hash": sha256_hash},
+    )
     return sha256_hash

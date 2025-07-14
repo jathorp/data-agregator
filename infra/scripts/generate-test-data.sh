@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# generate-test-data.sh ‒ v3.1
+# generate-test-data.sh ‒ v3.2
 #
 # Generates synthetic files and uploads them to an S3 bucket for pipeline
-# testing.  Supports parallel uploads, random (incompressible) or zero-filled
+# testing. Supports parallel uploads, random (incompressible) or zero-filled
 # data, optional SSE, dry-run mode, and safe cleanup on Ctrl-C.
 #
 # Dependencies: aws-cli v2+, GNU coreutils (dd|fallocate), or macOS equivalents
@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-# ---------- Globals -----------------------------------------------------------
+# ---------- Globals & Setup ---------------------------------------------------
 SCRIPT_NAME=$(basename "$0")
 TMP_DIR=$(mktemp -d)
 START_TIME=$(date +%s)
@@ -33,7 +33,7 @@ if [[ "$(uname)" == "Darwin" ]] && command -v gdate >/dev/null; then
   DATE_CMD="gdate"
 fi
 
-# ---------- Usage -------------------------------------------------------------
+# ---------- Help and Examples ------------------------------------------------
 usage() {
   cat <<EOF
 Usage: $SCRIPT_NAME -b <bucket> -s <sizeMB> [options]
@@ -50,9 +50,30 @@ Optional:
   --random            Use incompressible random data   (slower)
   --keep              Retain local files after upload
   --dry-run           Print actions without executing
+  -e, --examples      Show common usage examples
   -h, --help          Show this help
 EOF
   exit 1
+}
+
+show_examples() {
+  cat <<EOF
+Usage Examples:
+
+  1. Basic Smoke Test (5 small files of 1MB each)
+     $SCRIPT_NAME -b your-bucket -s 1 -n 5
+
+  2. Compression Test (200MB of highly compressible data)
+     $SCRIPT_NAME -b your-bucket -s 10 -n 20
+
+  3. Throughput/Load Test (1GB of incompressible data, 8 parallel uploads)
+     $SCRIPT_NAME -b your-bucket -s 10 -n 100 -c 8 --random
+
+  4. Security/Compliance Test (Server-Side Encryption)
+     $SCRIPT_NAME -b your-bucket -s 5 -n 10 --sse AES256
+
+EOF
+  exit 0
 }
 
 # ---------- Argument parsing --------------------------------------------------
@@ -67,6 +88,7 @@ while [[ $# -gt 0 ]]; do
     --random)         USE_RANDOM_DATA=true; shift;;
     --keep)           KEEP_LOCAL=true; shift;;
     --dry-run)        DRY_RUN=true; shift;;
+    -e|--examples)    show_examples;; # <-- NEW
     -h|--help)        usage;;
     *) echo "Unknown option: $1" >&2; usage;;
   esac

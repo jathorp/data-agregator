@@ -266,6 +266,7 @@ def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailure
 
     batch_failures: List[PartialItemFailures] = processor.response()["batchItemFailures"]
 
+    # CORRECT: Extract the .result from each successful message object.
     # The .result attribute holds the return value from our record_handler.
     # Also, filter out any None/empty results, which represent duplicates.
     successful_records = [rec.result for rec in processor.success_messages if rec.result]
@@ -286,6 +287,7 @@ def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailure
             for rec in processor.success_messages:
                 if rec.result:  # Only retry records that were actually successful in stage 1
                     batch_failures.append({"itemIdentifier": rec.message_id})
+    # --- END OF CORRECTED SECTION ---
 
     if not successful_records and not batch_failures:
         logger.info("All records in batch were duplicates, no new work performed.")

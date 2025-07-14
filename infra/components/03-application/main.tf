@@ -30,21 +30,16 @@ resource "aws_iam_policy" "aggregator_lambda_policy" {
         Resource = data.terraform_remote_state.stateful.outputs.main_queue_arn
       },
       {
-        # FIX: Allow GetObject from landing (for input) and archive (for copy source)
+        # Lambda only needs to read input files from the landing bucket.
         Action   = "s3:GetObject"
         Effect   = "Allow"
-        Resource = [
-          "${data.terraform_remote_state.stateful.outputs.landing_bucket_arn}/*",
-          "${data.terraform_remote_state.stateful.outputs.archive_bucket_arn}/*"
-        ]
+        Resource = "${data.terraform_remote_state.stateful.outputs.landing_bucket_arn}/*"
       },
       {
+        # Lambda only needs to write the final bundle to the distribution bucket.
         Action   = "s3:PutObject"
         Effect   = "Allow"
-        Resource = [
-          "${data.terraform_remote_state.stateful.outputs.archive_bucket_arn}/*",
-          "${data.terraform_remote_state.stateful.outputs.distribution_bucket_arn}/*"
-        ]
+        Resource = "${data.terraform_remote_state.stateful.outputs.distribution_bucket_arn}/*"
       },
       {
         Action   = ["dynamodb:GetItem", "dynamodb:PutItem"]
@@ -129,10 +124,9 @@ resource "aws_lambda_function" "aggregator" {
 
   environment {
     variables = {
-      ARCHIVE_BUCKET_NAME      = data.terraform_remote_state.stateful.outputs.archive_bucket_id
       DISTRIBUTION_BUCKET_NAME = data.terraform_remote_state.stateful.outputs.distribution_bucket_id
       IDEMPOTENCY_TABLE_NAME   = data.terraform_remote_state.stateful.outputs.idempotency_table_name
-      LOG_LEVEL                = "DEBUG"
+      LOG_LEVEL                = var.log_level
       IDEMPOTENCY_TTL_DAYS     = var.idempotency_ttl_days
     }
   }

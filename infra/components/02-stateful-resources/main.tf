@@ -166,9 +166,17 @@ resource "aws_s3_bucket_policy" "archive" {
 }
 
 # Distribution Bucket
+
 resource "aws_s3_bucket" "distribution" {
   bucket = var.distribution_bucket_name
   tags   = merge(local.common_tags, { Name = var.distribution_bucket_name })
+}
+
+resource "aws_s3_bucket_versioning" "distribution" {
+  bucket = aws_s3_bucket.distribution.id
+  versioning_configuration {
+    status = "Enabled"
+  }
 }
 
 resource "aws_s3_bucket_logging" "distribution" {
@@ -206,6 +214,95 @@ resource "aws_s3_bucket_lifecycle_configuration" "distribution" {
 resource "aws_s3_bucket_policy" "distribution" {
   bucket = aws_s3_bucket.distribution.id
   policy = data.aws_iam_policy_document.enforce_tls_distribution.json
+}
+
+# ──────────────────────────────────────────────────────────────
+# S3 Replication Configuration (Distribution -> Archive)
+# ──────────────────────────────────────────────────────────────
+
+# IAM Role for S3 to assume when replicating objects.
+resource "aws_iam_role" "replication" {
+  name = "${var.project_name}-${var.environment_name}-s3-replication-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "s3.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+# IAM Policy defining what the replication role is allowed to do.
+resource "aws_iam_policy" "replication" {
+  name_prefix = "${var.project_name}-${var.environment_name}-s3-replication-policy-"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # Allow reading from the source bucket
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket",
+          "s3:GetReplicationConfiguration",
+          "s3:GetObjectVersionForReplication",
+          "s3:GetObjectVersionAcl",
+          "s3:GetObjectVersionTagging"
+        ]
+        Resource = [
+          aws_s3_bucket.distribution.arn,
+          "${aws_s3_bucket.distribution.arn}/*"
+        ]
+      },
+      {
+        # Allow writing to the destination bucket
+        Effect = "Allow"
+        Action = [
+          "s3:ReplicateObject",
+          "s3:ReplicateDelete",
+          "s3:ReplicateTags"
+        ]
+        Resource = "${aws_s3_bucket.archive.arn}/*"
+      }
+    ]
+  })
+}
+
+# Attach the policy to the role.
+resource "aws_iam_role_policy_attachment" "replication" {
+  role       = aws_iam_role.replication.name
+  policy_arn = aws_iam_policy.replication.arn
+}
+
+# The replication configuration itself, attached to the source bucket.
+resource "aws_s3_bucket_replication_configuration" "distribution_to_archive" {
+  depends_on = [aws_iam_role.replication]
+
+  role   = aws_iam_role.replication.arn
+  bucket = aws_s3_bucket.distribution.id
+
+  rule {
+    id = "DistToArchive"
+    status = "Enabled"
+
+    filter {} # An empty filter means "replicate everything"
+
+    destination {
+      bucket = aws_s3_bucket.archive.arn
+      storage_class = "STANDARD" # Bundles arrive in Standard, then transition via lifecycle.
+    }
+
+    # This is the key part: DO NOT replicate delete markers.
+    delete_marker_replication {
+      status = "Disabled"
+    }
+  }
 }
 
 # ──────────────────────────────────────────────────────────────

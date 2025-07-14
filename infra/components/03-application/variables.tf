@@ -1,3 +1,5 @@
+# src/data_aggregator/variables.py
+
 variable "project_name" {
   description = "The name of the project."
   type        = string
@@ -67,4 +69,10 @@ variable "idempotency_ttl_days" {
   description = "The number of days to retain the idempotency key in DynamoDB."
   type        = number
   default     = 7
+}
+
+variable "log_level" {
+  description = "The log level for the Lambda function's Powertools logger (e.g., 'INFO', 'DEBUG')."
+  type        = string
+  default     = "INFO"
 }

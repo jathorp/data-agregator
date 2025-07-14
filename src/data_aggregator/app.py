@@ -269,6 +269,8 @@ def handler(event: Dict[str, Any], context: LambdaContext) -> PartialItemFailure
     # CORRECT: Extract the .result from each successful message object.
     # The .result attribute holds the return value from our record_handler.
     # Also, filter out any None/empty results, which represent duplicates.
+    logger.info(f"Batch failed records: {processor.success_messages}")
+
     successful_records = [rec.result for rec in processor.success_messages if rec.result]
 
     logger.debug(

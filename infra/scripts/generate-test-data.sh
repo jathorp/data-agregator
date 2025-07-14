@@ -1,84 +1,164 @@
-#!/bin/bash
-
+#!/usr/bin/env bash
 # ==============================================================================
-# generate-test-data.sh
+# generate-test-data.sh ‒ v3
 #
-# A utility script to generate and upload test files to an S3 bucket.
-# Ideal for integration and load testing the data-aggregator pipeline.
+# Generates synthetic files and uploads them to an S3 bucket for pipeline
+# testing.  Supports parallel uploads, random (incompressible) or zero-filled
+# data, optional SSE, dry-run mode, and safe cleanup on Ctrl-C.
 #
-# Dependencies:
-#   - aws-cli (configured and authenticated)
-#   - dd (standard on Linux/macOS)
-#
-# Examples
-#
-# ./scripts/generate-test-data.sh -b data-aggregator-landing-dev -s 5
-# ./scripts/generate-test-data.sh -b data-aggregator-landing-dev -s 200
-# ./scripts/generate-test-data.sh -b data-aggregator-landing-dev -s 1 -n 50 -p load-test/
-# ==============================================================================
+# Dependencies: aws-cli v2+, GNU coreutils (dd|fallocate), or macOS equivalents
+# ------------------------------------------------------------------------------
 
-set -e # Exit immediately if a command exits with a non-zero status.
+set -euo pipefail
 
-# --- Default values ---
+# ---------- Globals -----------------------------------------------------------
+SCRIPT_NAME=$(basename "$0")
+TMP_DIR=$(mktemp -d)
+START_TIME=$(date +%s)
+
+# Default parameters
 NUM_FILES=1
+FILE_SIZE_MB=""
+S3_BUCKET=""
 S3_PREFIX=""
+CONCURRENCY=1          # ≥1
+SSE=""                 # e.g. AES256 | aws:kms
+KEEP_LOCAL=false
+DRY_RUN=false
+USE_RANDOM_DATA=false
 
-# --- Usage instructions ---
+# ---------- Usage -------------------------------------------------------------
 usage() {
-  echo "Usage: $0 -b <bucket_name> -s <size_in_mb> [-n <num_files>] [-p <s3_prefix>]"
-  echo "  -b <bucket_name>    (Required) The name of the S3 landing bucket."
-  echo "  -s <size_in_mb>     (Required) The size of each test file to generate in Megabytes."
-  echo "  -n <num_files>      (Optional) The number of files to generate. Default: 1."
-  echo "  -p <s3_prefix>      (Optional) A prefix (folder) to use for the S3 object key."
-  echo "  -h                  Display this help message."
+  cat <<EOF
+Usage: $SCRIPT_NAME -b <bucket> -s <sizeMB> [options]
+
+Required:
+  -b, --bucket        Target S3 bucket name
+  -s, --size          Size of each file in MB
+
+Optional:
+  -n, --num           Number of files to generate      (default: 1)
+  -p, --prefix        S3 object prefix (folder)        (default: "")
+  -c, --concurrency   Parallel uploads                 (default: 1, ≥1)
+  --sse <alg>         Server-side encryption alg       (AES256 | aws:kms)
+  --random            Use incompressible random data   (slower)
+  --keep              Retain local files after upload
+  --dry-run           Print actions without executing
+  -h, --help          Show this help
+
+Examples:
+  $SCRIPT_NAME -b my-bucket -s 10 -n 100 -p load/ -c 4
+  $SCRIPT_NAME --bucket my-bucket --size 200 --sse AES256 --random
+EOF
   exit 1
 }
 
-# --- Parse command-line arguments ---
-while getopts "b:s:n:p:h" opt; do
-  case ${opt} in
-    b ) S3_BUCKET=$OPTARG;;
-    s ) FILE_SIZE_MB=$OPTARG;;
-    n ) NUM_FILES=$OPTARG;;
-    p ) S3_PREFIX=$OPTARG;;
-    h ) usage;;
-    \? ) usage;;
+# ---------- Argument parsing --------------------------------------------------
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -b|--bucket)      S3_BUCKET=$2; shift 2;;
+    -s|--size)        FILE_SIZE_MB=$2; shift 2;;
+    -n|--num)         NUM_FILES=$2; shift 2;;
+    -p|--prefix)      S3_PREFIX=$2; shift 2;;
+    -c|--concurrency) CONCURRENCY=$2; shift 2;;
+    --sse)            SSE=$2; shift 2;;
+    --random)         USE_RANDOM_DATA=true; shift;;
+    --keep)           KEEP_LOCAL=true; shift;;
+    --dry-run)        DRY_RUN=true; shift;;
+    -h|--help)        usage;;
+    *) echo "Unknown option: $1" >&2; usage;;
   esac
 done
 
-# --- Validate required arguments ---
-if [ -z "${S3_BUCKET}" ] || [ -z "${FILE_SIZE_MB}" ]; then
-  echo "Error: Missing required arguments."
-  usage
-fi
+# ---------- Validation --------------------------------------------------------
+[[ -z $S3_BUCKET || -z $FILE_SIZE_MB ]] && {
+  echo "Error: --bucket and --size are required." >&2; usage; }
 
-# --- Validate dependencies ---
-if ! command -v aws >/dev/null 2>&1; then
-    echo "Error: 'aws' command not found. Please install and configure the AWS CLI."
-    exit 1
-fi
-if ! command -v dd >/dev/null 2>&1; then
-    echo "Error: 'dd' command not found. This script requires a standard Unix-like environment."
-    exit 1
-fi
+[[ $NUM_FILES =~ ^[0-9]+$ && $FILE_SIZE_MB =~ ^[0-9]+$ && $CONCURRENCY =~ ^[0-9]+$ ]] || {
+  echo "Error: numeric arguments required for -n, -s, -c." >&2; exit 1; }
 
-# --- Main loop ---
-echo "Starting test data generation..."
-for i in $(seq 1 "$NUM_FILES"); do
-  local_filename="test-data-$(date +%s)-${i}.bin"
+(( CONCURRENCY > 0 )) || { echo "Error: --concurrency must be ≥1." >&2; exit 1; }
 
-  echo "---"
-  echo "-> Generating ${FILE_SIZE_MB}MB file: $local_filename..."
-  # Use dd to create a file of the specified size with random binary data.
-  # Suppress dd's own output for a cleaner log.
-  dd if=/dev/urandom of="$local_filename" bs=1M count="$FILE_SIZE_MB" >/dev/null 2>&1
+command -v aws >/dev/null 2>&1 || { echo "aws CLI not found." >&2; exit 1; }
 
-  echo "--> Uploading to s3://${S3_BUCKET}/${S3_PREFIX}${local_filename}..."
-  # Use aws s3 cp, which will automatically handle multipart uploads for large files.
-  aws s3 cp "$local_filename" "s3://${S3_BUCKET}/${S3_PREFIX}${local_filename}"
+# ---------- Cleanup traps -----------------------------------------------------
+cleanup() {
+  $KEEP_LOCAL || rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT TERM
+trap 'cleanup; kill 0' INT        # Ensure subshells die on Ctrl-C
 
-  echo "---> Cleaning up local file."
-  rm "$local_filename"
-done
+# ---------- Worker functions --------------------------------------------------
+make_file() {
+  # Creates a file and echoes its path
+  local idx=$1
+  local fname="${TMP_DIR}/test-$(date +%s%N)-${idx}.bin"
 
-echo -e "\n✅ All done. $NUM_FILES file(s) uploaded to s3://${S3_BUCKET}/${S3_PREFIX}"
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "[DRY] would create $fname"
+    echo "$fname"
+    return
+  fi
+
+  echo "[${idx}] Generating ${FILE_SIZE_MB}MB ${USE_RANDOM_DATA:+random }file…"
+
+  if [[ "$USE_RANDOM_DATA" == "true" ]]; then
+    # Incompressible data
+    command -v dd >/dev/null 2>&1 || { echo "dd not found." >&2; exit 1; }
+    dd if=/dev/urandom of="$fname" bs=1M count="$FILE_SIZE_MB" status=none
+  else
+    # Fast zero fill (sparse when possible)
+    if command -v fallocate >/dev/null 2>&1; then
+      fallocate -l "${FILE_SIZE_MB}M" "$fname"
+    elif command -v mkfile >/dev/null 2>&1; then
+      mkfile -n "${FILE_SIZE_MB}m" "$fname"  # '-n' => sparse on macOS
+    else
+      dd if=/dev/zero of="$fname" bs=1M count="$FILE_SIZE_MB" status=none
+    fi
+  fi
+  echo "$fname"
+}
+
+upload_file() {
+  local file_path=$1
+  local key="${S3_PREFIX}$(basename "$file_path")"
+  local sse_args=()
+  [[ -n $SSE ]] && sse_args+=(--sse "$SSE")
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "[DRY] would upload $file_path ➜ s3://$S3_BUCKET/$key"
+    return
+  fi
+
+  aws s3 cp --no-progress "$file_path" "s3://$S3_BUCKET/$key" "${sse_args[@]}"
+  echo "[✓] Uploaded $(basename "$file_path")"
+  $KEEP_LOCAL || rm -f "$file_path"
+}
+
+process_item() {
+  local idx=$1
+  local path
+  path=$(make_file "$idx")
+  [[ -n $path ]] && upload_file "$path"
+}
+
+export -f make_file upload_file process_item
+export FILE_SIZE_MB S3_BUCKET S3_PREFIX SSE DRY_RUN KEEP_LOCAL USE_RANDOM_DATA
+
+# ---------- Main --------------------------------------------------------------
+data_kind=$([[ "$USE_RANDOM_DATA" == "true" ]] && echo "incompressible (random)" || echo "compressible (zeros)")
+echo "### Test-data generator"
+echo "Files     : $NUM_FILES × ${FILE_SIZE_MB} MB  ($data_kind)"
+echo "Bucket    : s3://$S3_BUCKET/$S3_PREFIX"
+echo "Concurrency: $CONCURRENCY | SSE: ${SSE:-none} | KEEP_LOCAL: $KEEP_LOCAL | DRY_RUN: $DRY_RUN"
+echo "Temp dir  : $TMP_DIR"
+echo "-----------------------------------------------------------------"
+
+seq 1 "$NUM_FILES" | xargs -I{} -P "$CONCURRENCY" bash -c 'process_item "{}"'
+
+END_TIME=$(date +%s)
+TOTAL_MB=$(( NUM_FILES * FILE_SIZE_MB ))
+summary="Completed"
+[[ "$DRY_RUN" == "true" ]] && summary="(dry-run) completed"
+printf "\n✅  %s: %d MB across %d object(s) in %ds.\n" \
+       "$summary" "$TOTAL_MB" "$NUM_FILES" "$(( END_TIME - START_TIME ))"

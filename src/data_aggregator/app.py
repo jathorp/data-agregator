@@ -48,7 +48,6 @@ from .schemas import S3EventRecord
 CONFIG = get_config()
 
 logger = Logger(service=CONFIG.service_name, level=CONFIG.log_level)
-logger.append_keys(environment=CONFIG.environment)
 tracer = Tracer(service=CONFIG.service_name)
 metrics = Metrics(namespace="DataAggregator", service=CONFIG.service_name)
 metrics.set_default_dimensions(environment=CONFIG.environment)
@@ -60,7 +59,7 @@ idempotency_persistence_layer = DynamoDBPersistenceLayer(
     table_name=CONFIG.idempotency_table
 )
 idempotency_config = IdempotencyConfig(
-    event_key_jmespath="data.idempotency_key",
+    event_key_jmespath="idempotency_key",
     payload_validation_jmespath="data.s3_object.size",
     expires_after_seconds=CONFIG.idempotency_ttl_seconds,
     use_local_cache=True,

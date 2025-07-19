@@ -63,9 +63,7 @@ idempotency_persistence_layer = DynamoDBPersistenceLayer(
 )
 
 idempotency_config = IdempotencyConfig(
-    # NOTE: JMESPath for the IDEMPOTENCY KEY. This is what's used to populate the 'object_key' attribute.
     event_key_jmespath="idempotency_key",
-    # NOTE: JMESPath for payload validation.
     payload_validation_jmespath="s3_object.size",
     expires_after_seconds=CONFIG.idempotency_ttl_seconds,
     use_local_cache=True,

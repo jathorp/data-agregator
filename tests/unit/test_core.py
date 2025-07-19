@@ -88,6 +88,7 @@ def test_process_and_stage_batch_raises_error_for_empty_records(mock_lambda_cont
             context=mock_lambda_context,
         )
 
+
 # --- Core Logic and Security Tests ---
 
 

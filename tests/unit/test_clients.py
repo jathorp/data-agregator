@@ -1,11 +1,19 @@
 # tests/unit/test_clients.py
 
-from unittest.mock import MagicMock, call
+"""
+Unit tests for the S3Client wrapper in src/data_aggregator/clients.py.
+
+These tests ensure that our custom S3Client correctly interacts with the
+underlying boto3 client, passing the expected arguments for various
+operations like getting objects and uploading files with and without KMS.
+"""
+
+from unittest.mock import MagicMock
 
 import pytest
-from botocore.exceptions import ClientError
 
-from src.data_aggregator.clients import DynamoDBClient, S3Client
+from src.data_aggregator.clients import S3Client
+
 
 # -----------------------------------------------------------------------------
 # Fixtures for setting up clients with mock dependencies
@@ -13,37 +21,21 @@ from src.data_aggregator.clients import DynamoDBClient, S3Client
 
 
 @pytest.fixture
-def mock_boto_s3_client():
+def mock_boto_s3_client() -> MagicMock:
     """Yields a MagicMock for the boto3 S3 client."""
     return MagicMock()
 
 
 @pytest.fixture
-def s3_client(mock_boto_s3_client):
+def s3_client(mock_boto_s3_client: MagicMock) -> S3Client:
     """Yields an instance of our S3Client wrapper without KMS."""
     return S3Client(s3_client=mock_boto_s3_client)
 
 
 @pytest.fixture
-def s3_client_with_kms(mock_boto_s3_client):
+def s3_client_with_kms(mock_boto_s3_client: MagicMock) -> S3Client:
     """Yields an instance of our S3Client wrapper with KMS enabled."""
     return S3Client(s3_client=mock_boto_s3_client, kms_key_id="test-kms-key")
-
-
-@pytest.fixture
-def mock_boto_dynamodb_client():
-    """Yields a MagicMock for the boto3 DynamoDB client."""
-    return MagicMock()
-
-
-@pytest.fixture
-def dynamodb_client(mock_boto_dynamodb_client):
-    """Yields an instance of our DynamoDBClient wrapper."""
-    return DynamoDBClient(
-        dynamo_client=mock_boto_dynamodb_client,
-        table_name="test-idempotency-table",
-        ttl_attribute="ttl",
-    )
 
 
 # -----------------------------------------------------------------------------
@@ -51,31 +43,40 @@ def dynamodb_client(mock_boto_dynamodb_client):
 # -----------------------------------------------------------------------------
 
 
-def test_s3_client_get_file_content_stream(s3_client, mock_boto_s3_client):
+def test_s3_client_get_file_content_stream(
+    s3_client: S3Client, mock_boto_s3_client: MagicMock
+):
     """
     Verifies that get_file_content_stream calls get_object correctly and returns the body.
     """
     # Arrange
     mock_stream = MagicMock()
     mock_boto_s3_client.get_object.return_value = {"Body": mock_stream}
+    bucket, key = "test-bucket", "test-key"
 
     # Act
-    result = s3_client.get_file_content_stream(bucket="test-bucket", key="test-key")
+    result = s3_client.get_file_content_stream(bucket=bucket, key=key)
 
     # Assert
-    mock_boto_s3_client.get_object.assert_called_once_with(
-        Bucket="test-bucket", Key="test-key"
-    )
+    mock_boto_s3_client.get_object.assert_called_once_with(Bucket=bucket, Key=key)
     assert result is mock_stream
 
 
-def test_s3_client_upload_gzipped_bundle(s3_client, mock_boto_s3_client):
+def test_s3_client_upload_gzipped_bundle(
+    s3_client: S3Client, mock_boto_s3_client: MagicMock
+):
     """
-    Verifies that upload_gzipped_bundle calls upload_fileobj with the correct arguments.
+    Verifies that upload_gzipped_bundle calls upload_fileobj with the correct arguments
+    when no KMS key is configured.
     """
     # Arrange
     mock_file = MagicMock()
     test_hash = "fake-hash-123"
+    expected_extra_args = {
+        "Metadata": {"content-sha256": test_hash},
+        "ContentEncoding": "gzip",
+        "ContentType": "application/gzip",
+    }
 
     # Act
     s3_client.upload_gzipped_bundle(
@@ -83,12 +84,6 @@ def test_s3_client_upload_gzipped_bundle(s3_client, mock_boto_s3_client):
     )
 
     # Assert
-    # --- FIX: Assert the complete set of ExtraArgs ---
-    expected_extra_args = {
-        "Metadata": {"content-sha256": test_hash},
-        "ContentEncoding": "gzip",
-        "ContentType": "application/gzip",
-    }
     mock_boto_s3_client.upload_fileobj.assert_called_once_with(
         Fileobj=mock_file,
         Bucket="test-bucket",
@@ -98,22 +93,15 @@ def test_s3_client_upload_gzipped_bundle(s3_client, mock_boto_s3_client):
 
 
 def test_s3_client_upload_gzipped_bundle_with_kms(
-    s3_client_with_kms, mock_boto_s3_client
+    s3_client_with_kms: S3Client, mock_boto_s3_client: MagicMock
 ):
     """
-    Verifies that upload_gzipped_bundle includes KMS args when configured.
+    Verifies that upload_gzipped_bundle includes KMS arguments in ExtraArgs
+    when a KMS key is configured.
     """
     # Arrange
     mock_file = MagicMock()
     test_hash = "fake-hash-123"
-
-    # Act
-    s3_client_with_kms.upload_gzipped_bundle(
-        bucket="test-bucket", key="test-key", file_obj=mock_file, content_hash=test_hash
-    )
-
-    # Assert
-    # --- FIX: Assert the complete set of ExtraArgs including KMS ---
     expected_extra_args = {
         "Metadata": {"content-sha256": test_hash},
         "ContentEncoding": "gzip",
@@ -121,88 +109,16 @@ def test_s3_client_upload_gzipped_bundle_with_kms(
         "ServerSideEncryption": "aws:kms",
         "SSEKMSKeyId": "test-kms-key",
     }
+
+    # Act
+    s3_client_with_kms.upload_gzipped_bundle(
+        bucket="test-bucket", key="test-key", file_obj=mock_file, content_hash=test_hash
+    )
+
+    # Assert
     mock_boto_s3_client.upload_fileobj.assert_called_once_with(
         Fileobj=mock_file,
         Bucket="test-bucket",
         Key="test-key",
         ExtraArgs=expected_extra_args,
     )
-
-
-# -----------------------------------------------------------------------------
-# Tests for DynamoDBClient
-# -----------------------------------------------------------------------------
-
-
-def test_dynamodb_check_and_set_idempotency_succeeds_for_new_key(
-    dynamodb_client, mock_boto_dynamodb_client
-):
-    """
-    Verifies that the method returns True when the key is new and put_item succeeds.
-    """
-    # Arrange
-    test_idempotency_key = "new-hash-key"
-    test_original_key = "path/to/original/file.txt"
-    test_ttl = 12345
-
-    # Act
-    # --- FIX: Pass the new 'original_object_key' argument ---
-    result = dynamodb_client.check_and_set_idempotency(
-        test_idempotency_key, test_original_key, test_ttl
-    )
-
-    # Assert
-    # --- FIX: Assert the new Item structure in the put_item call ---
-    expected_item = {
-        "idempotency_key": {"S": test_idempotency_key},
-        "object_key": {"S": test_original_key},
-        "ttl": {"N": str(test_ttl)},
-    }
-    mock_boto_dynamodb_client.put_item.assert_called_once_with(
-        TableName="test-idempotency-table",
-        Item=expected_item,
-        ConditionExpression="attribute_not_exists(idempotency_key)",
-    )
-    assert result is True
-
-
-def test_dynamodb_check_and_set_idempotency_fails_for_existing_key(
-    dynamodb_client, mock_boto_dynamodb_client
-):
-    """
-    Verifies that the method returns False when the key already exists.
-    """
-    # Arrange
-    error_response = {"Error": {"Code": "ConditionalCheckFailedException"}}
-    mock_boto_dynamodb_client.put_item.side_effect = ClientError(
-        error_response, "PutItem"
-    )
-
-    # Act
-    # --- FIX: Pass the new 'original_object_key' argument ---
-    result = dynamodb_client.check_and_set_idempotency(
-        "existing-key", "path/to/original.txt", 12345
-    )
-
-    # Assert
-    assert result is False
-
-
-def test_dynamodb_check_and_set_idempotency_reraises_other_errors(
-    dynamodb_client, mock_boto_dynamodb_client
-):
-    """
-    Verifies that any ClientError other than the conditional check is re-raised.
-    """
-    # Arrange
-    error_response = {"Error": {"Code": "SomeOtherDynamoDBException"}}
-    mock_boto_dynamodb_client.put_item.side_effect = ClientError(
-        error_response, "PutItem"
-    )
-
-    # Act & Assert
-    with pytest.raises(ClientError):
-        # --- FIX: Pass the new 'original_object_key' argument ---
-        dynamodb_client.check_and_set_idempotency(
-            "any-key", "path/to/original.txt", 12345
-        )

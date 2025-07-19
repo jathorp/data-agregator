@@ -288,13 +288,13 @@ resource "aws_s3_bucket_replication_configuration" "distribution_to_archive" {
   bucket = aws_s3_bucket.distribution.id
 
   rule {
-    id = "DistToArchive"
+    id     = "DistToArchive"
     status = "Enabled"
 
     filter {} # An empty filter means "replicate everything"
 
     destination {
-      bucket = aws_s3_bucket.archive.arn
+      bucket        = aws_s3_bucket.archive.arn
       storage_class = "STANDARD" # Bundles arrive in Standard, then transition via lifecycle.
     }
 

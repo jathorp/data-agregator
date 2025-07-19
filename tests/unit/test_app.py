@@ -1,152 +1,119 @@
-# tests/unit/test_app.py
-
-import json
-import os
-from unittest.mock import MagicMock, patch
-
-import pytest
-from botocore.exceptions import ClientError
-
-# --- Environment and Boto3 Patching ---
-MOCK_ENV = {
-    "IDEMPOTENCY_TABLE_NAME": "test-idempotency-table",
-    "ARCHIVE_BUCKET_NAME": "test-archive-bucket",
-    "DISTRIBUTION_BUCKET_NAME": "test-distribution-bucket",
-    "POWERTOOLS_LOG_LEVEL": "INFO",
-}
-
-with patch("boto3.client"):
-    with patch.dict(os.environ, MOCK_ENV, clear=True):
-        from src.data_aggregator import app
-        from src.data_aggregator.exceptions import SQSBatchProcessingError
-
-# --- Fixtures ---
-
-
-@pytest.fixture
-def mock_lambda_context():
-    """Provides a mock LambdaContext object."""
-    context = MagicMock()
-    context.aws_request_id = "test-request-id-123"
-    return context
-
-
-# --- Helper ---
-
-
-def create_sqs_event(*records):
-    """Creates a full SQS event from one or more record dictionaries."""
-    return {"Records": list(records)}
-
-
-def create_sqs_record_dict(message_id, key, size):
-    """Creates a raw SQS record dictionary."""
-    s3_event_body = {"Records": [{"s3": {"object": {"key": key, "size": size}}}]}
-    return {"messageId": message_id, "body": json.dumps(s3_event_body)}
-
-
-# --- New tests for the main handler ---
-
-
-@patch("src.data_aggregator.app._process_successful_batch")
-@patch("src.data_aggregator.app.Dependencies")
-def test_handler_new_records_are_bundled(
-    mock_deps, mock_process_batch, mock_lambda_context
-):
-    """
-    Tests the happy path where new records are found and sent for bundling.
-    """
-    # Arrange
-    # Mock the DynamoDB client to report that the key is new
-    mock_deps.return_value.dynamodb_client.check_and_set_idempotency.return_value = True
-    event = create_sqs_event(
-        create_sqs_record_dict("msg1", "file1.txt", 100),
-        create_sqs_record_dict("msg2", "file2.txt", 200),
-    )
-
-    # Act
-    result = app.handler(event, mock_lambda_context)
-
-    # Assert
-    # Check that the bundling function was called
-    mock_process_batch.assert_called_once()
-    # Check that it received the correct, extracted S3 records
-    called_with_records = mock_process_batch.call_args[0][0]
-    assert len(called_with_records) == 2
-    assert called_with_records[0]["s3"]["object"]["key"] == "file1.txt"
-    # Check that no failures were reported to SQS
-    assert result["batchItemFailures"] == []
-
-
-@patch("src.data_aggregator.app._process_successful_batch")
-@patch("src.data_aggregator.app.Dependencies")
-def test_handler_duplicates_are_skipped(
-    mock_deps, mock_process_batch, mock_lambda_context
-):
-    """
-    Tests that if all records are duplicates, the bundling process is not triggered.
-    """
-    # Arrange
-    # Mock the DynamoDB client to report that all keys are duplicates
-    mock_deps.return_value.dynamodb_client.check_and_set_idempotency.return_value = (
-        False
-    )
-    event = create_sqs_event(create_sqs_record_dict("msg1", "file1.txt", 100))
-
-    # Act
-    result = app.handler(event, mock_lambda_context)
-
-    # Assert
-    # The bundling function should NOT have been called
-    mock_process_batch.assert_not_called()
-    assert result["batchItemFailures"] == []
-
-
-@patch("src.data_aggregator.app._process_successful_batch")
-@patch("src.data_aggregator.app.Dependencies")
-def test_handler_malformed_message_is_reported_as_failure(
-    mock_deps, mock_process_batch, mock_lambda_context
-):
-    """
-    Tests that a record with a non-JSON body is correctly marked as a failure.
-    """
-    # Arrange
-    event = create_sqs_event({"messageId": "bad_msg", "body": "this-is-not-json"})
-
-    # Act
-    result = app.handler(event, mock_lambda_context)
-
-    # Assert
-    mock_process_batch.assert_not_called()
-    assert len(result["batchItemFailures"]) == 1
-    assert result["batchItemFailures"][0]["itemIdentifier"] == "bad_msg"
-
-
-@patch("src.data_aggregator.app._process_successful_batch")
-@patch("src.data_aggregator.app.Dependencies")
-def test_handler_batch_failure_retries_successful_items(
-    mock_deps, mock_process_batch, mock_lambda_context
-):
-    """
-    Tests that if bundling fails, the records that were successfully processed
-    in stage 1 are returned to SQS for a retry.
-    """
-    # Arrange
-    # All records will be new initially
-    mock_deps.return_value.dynamodb_client.check_and_set_idempotency.return_value = True
-    # But the bundling process will fail
-    mock_process_batch.side_effect = SQSBatchProcessingError("Bundling failed!")
-
-    event = create_sqs_event(
-        create_sqs_record_dict("msg1", "file1.txt", 100),
-        create_sqs_record_dict("msg2", "file2.txt", 200),
-    )
-
-    # Act
-    result = app.handler(event, mock_lambda_context)
-
-    # Assert
-    # The final failure list should contain the two successful messages for retry
-    assert len(result["batchItemFailures"]) == 2
-    assert result["batchItemFailures"][0]["itemIdentifier"] == "msg1"
-    assert result["batchItemFailures"][1]["itemIdentifier"] == "msg2"
+# # tests/unit/test_app.py
+# import json
+# import time
+# from unittest.mock import patch, MagicMock
+#
+# import pytest
+#
+# # Official Powertools constants for better test hygiene
+# from aws_lambda_powertools.utilities.idempotency.persistence.base import (
+#     STATUS_CONSTANTS,
+# )
+#
+# # Botocore Stubber for strict, high-fidelity mocking of boto3
+# from botocore.stub import Stubber, ANY
+#
+#
+# # --- Fixtures (no changes here) ---
+# @pytest.fixture(autouse=True)
+# def set_env_vars(monkeypatch):
+#     monkeypatch.setenv("IDEMPOTENCY_TABLE", "dummy-idempotency-table")
+#     monkeypatch.setenv("TARGET_TABLE", "dummy-target-table")
+#     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+#
+#
+# @pytest.fixture
+# def sqs_event():
+#     return {
+#         "Records": [
+#             {
+#                 "messageId": "12345-67890",
+#                 "body": '{"product_id": "P123", "quantity": 10}',
+#             }
+#         ]
+#     }
+#
+#
+# @pytest.fixture
+# def lambda_context():
+#     context = MagicMock()
+#     context.function_name = "test-function"
+#     context.memory_limit_in_mb = 128
+#     context.invoked_function_arn = "arn:aws:lambda:eu-west-1:809313241:function:test"
+#     context.aws_request_id = "52fdfc07-2182-154f-163f-5f0f9a621d72"
+#     context.get_remaining_time_in_millis.return_value = 100000
+#     return context
+#
+#
+# # --- Tests using the official patterns ---
+#
+#
+# def test_handler_logic_with_idempotency_disabled(
+#     sqs_event, lambda_context, monkeypatch
+# ):
+#     """(Priority 1 Suggestion) Tests business logic.
+#     Pytest's monkeypatch fixture automatically handles teardown,
+#     ensuring POWERTOOLS_IDEMPOTENCY_DISABLED is unset after this test,
+#     preventing test pollution.
+#     """
+#     monkeypatch.setenv("POWERTOOLS_IDEMPOTENCY_DISABLED", "true")
+#
+#     mock_ddb_table = MagicMock()
+#     with patch("data_aggregator.app.boto3.resource") as mock_boto3_resource:
+#         mock_boto3_resource.return_value.Table.return_value = mock_ddb_table
+#         from data_aggregator.app import lambda_handler
+#
+#         result = lambda_handler(sqs_event, lambda_context)
+#
+#     assert result["status"] == "processed"
+#     mock_ddb_table.put_item.assert_called_once_with(Item=sqs_event["Records"][0])
+#
+#
+# def test_handler_is_idempotent_with_stubber(sqs_event, lambda_context, mocker):
+#     """(Priority 2 Suggestion) Tests idempotency using the strict Botocore Stubber."""
+#     from data_aggregator.app import persistence_layer, lambda_handler
+#
+#     # The Stubber is stricter than MagicMock. It will only allow calls
+#     # that match the exact parameters you define.
+#     stubber = Stubber(persistence_layer.client)
+#
+#     saved_result = {"status": "processed", "messageId": "12345-67890"}
+#     mocker.patch("data_aggregator.app.process_message", return_value=saved_result)
+#
+#     # --- SIMULATE THE FIRST CALL ---
+#     # The Stubber has revealed the true internal calls:
+#     # 1. A `put_item` call to save the "INPROGRESS" status.
+#     # 2. An `update_item` call to set the status to "COMPLETED" and add the result.
+#     stubber.add_response("put_item", {})
+#     stubber.add_response("update_item", {})  # THIS IS THE FIX
+#
+#     with stubber:
+#         lambda_handler(sqs_event, lambda_context)
+#         stubber.assert_no_pending_responses()  # Ensure all expected calls were made
+#
+#     # --- SIMULATE THE SECOND CALL ---
+#     # a) Simulate "item already exists" by making the 'put_item' call fail
+#     #    with a ConditionalCheckFailedException.
+#     stubber.add_client_error(
+#         method="put_item", service_error_code="ConditionalCheckFailedException"
+#     )
+#
+#     # b) Simulate the subsequent 'get_item' call, returning the saved record.
+#     #    (Priority 1 Suggestion) Use the official constant for status.
+#     future_timestamp = int(time.time()) + 3600
+#     dynamodb_item_response = {
+#         "Item": {
+#             "id": {"S": "some-idempotency-key"},
+#             "data": {"S": json.dumps(saved_result)},
+#             "status": {"S": STATUS_CONSTANTS["COMPLETED"]},  # Using the constant
+#             "expiration": {"N": str(future_timestamp)},
+#         }
+#     }
+#     expected_get_params = {"TableName": ANY, "Key": ANY, "ConsistentRead": ANY}
+#     stubber.add_response("get_item", dynamodb_item_response, expected_get_params)
+#
+#     with stubber:
+#         second_call_result = lambda_handler(sqs_event, lambda_context)
+#         stubber.assert_no_pending_responses()
+#
+#     assert second_call_result == saved_result

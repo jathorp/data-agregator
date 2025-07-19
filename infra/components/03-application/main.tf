@@ -128,6 +128,7 @@ resource "aws_lambda_function" "aggregator" {
       IDEMPOTENCY_TABLE_NAME   = data.terraform_remote_state.stateful.outputs.idempotency_table_name
       LOG_LEVEL                = var.log_level
       IDEMPOTENCY_TTL_DAYS     = var.idempotency_ttl_days
+      SERVICE_NAME             = var.project_name
     }
   }
 
@@ -146,6 +147,6 @@ resource "aws_lambda_event_source_mapping" "sqs_trigger" {
   event_source_arn                   = data.terraform_remote_state.stateful.outputs.main_queue_arn
   function_name                      = aws_lambda_function.aggregator.arn
   batch_size                         = 100
-  maximum_batching_window_in_seconds = 5
+  maximum_batching_window_in_seconds = 15
   function_response_types            = ["ReportBatchItemFailures"]
 }

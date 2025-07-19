@@ -10,7 +10,7 @@ for parsing the S3 event notification record. Using a central schema file:
   - Serves as clear documentation for the expected data shapes.
 """
 
-from typing import TypedDict
+from typing import TypedDict, NotRequired
 
 
 class S3Object(TypedDict):
@@ -18,6 +18,7 @@ class S3Object(TypedDict):
 
     key: str
     size: int
+    versionId: NotRequired[str]
 
 
 class S3Bucket(TypedDict):

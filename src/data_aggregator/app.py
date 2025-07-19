@@ -1,242 +1,250 @@
-# src/data_aggregator/app.py — side‑car‑list variant (simpler “no‑raise” BatchProcessor)
+# src/data_aggregator/app.py
+
 """
-Lambda entry point for the Data‑Aggregator service (SQS → S3 bundler)
----------------------------------------------------------------------
-Key design choices
-==================
-* **Side‑car lists** collect per‑record state; we never mutate Powertools
-  objects. This keeps us library‑agnostic and easy to reason about.
-* **BatchProcessor(raise_on_entire_batch_failure=False)** – Powertools will now
-  *always* populate `processor.response()` instead of throwing
-  `BatchProcessingError`. That means we no longer need the `try/except` guard
-  nor the manual translation of `failed_messages`.
+The Lambda Adapter & Orchestrator for the Data Aggregator service.
+
+This module is the main entry point for the AWS Lambda function. It is
+responsible for:
+1.  Initializing and configuring AWS Lambda Powertools (Logger, Tracer, Metrics,
+    and Idempotency).
+2.  Parsing and validating incoming SQS messages containing S3 event notifications.
+3.  Orchestrating the idempotency check for each incoming S3 object to ensure
+    exactly-once processing.
+4.  Aggregating valid, non-duplicate records into a single batch.
+5.  Invoking the core business logic (`process_and_stage_batch`) to create and
+    upload the final Gzip bundle.
+6.  Implementing robust partial batch failure handling.
 """
 
-from __future__ import annotations
-
-import hashlib
 import json
-import os
-import time
-from dataclasses import dataclass
-from functools import cached_property
-from typing import Any, Dict, List, cast
-from urllib.parse import unquote_plus
+from datetime import datetime, timezone
+from typing import Any, List, Set, cast
 
 import boto3
 from aws_lambda_powertools import Logger, Metrics, Tracer
 from aws_lambda_powertools.metrics import MetricUnit
-from aws_lambda_powertools.utilities.batch import BatchProcessor, EventType
 from aws_lambda_powertools.utilities.batch.types import (
-    PartialItemFailureResponse,
     PartialItemFailures,
+    PartialItemFailureResponse,
 )
-from aws_lambda_powertools.utilities.data_classes.sqs_event import SQSRecord
+from aws_lambda_powertools.utilities.idempotency import (
+    IdempotencyConfig,
+    idempotent_function,
+)
+from aws_lambda_powertools.utilities.idempotency.exceptions import (
+    IdempotencyItemAlreadyExistsError,
+)
+from aws_lambda_powertools.utilities.idempotency.persistence.dynamodb import (
+    DynamoDBPersistenceLayer,
+)
 from aws_lambda_powertools.utilities.typing import LambdaContext
-from botocore.exceptions import ClientError
 
-from .clients import DynamoDBClient, S3Client
+from .clients import S3Client
+from .config import CONFIG
 from .core import process_and_stage_batch
-from .exceptions import (
-    SQSBatchProcessingError,
-    BatchTooLargeError,
-    BundlingTimeoutError,
-    TransientDynamoError,
-)
 from .schemas import S3EventRecord
 
-
-# ─────────────────────────────────────────────────────────────
-#  Configuration
-# ─────────────────────────────────────────────────────────────
-@dataclass(frozen=True, slots=True)
-class EnvConfig:
-    """Fail‑fast wrapper around environment variables."""
-
-    idempotency_table: str = os.environ["IDEMPOTENCY_TABLE_NAME"]
-    distribution_bucket: str = os.environ["DISTRIBUTION_BUCKET_NAME"]
-
-    idempotency_ttl_days: int = int(os.environ.get("IDEMPOTENCY_TTL_DAYS", "7"))
-    dynamodb_ttl_attribute: str = os.environ.get("DYNAMODB_TTL_ATTRIBUTE", "ttl")
-    environment: str = os.environ.get("ENV", "dev")
-    log_level: str = os.environ.get("POWERTOOLS_LOG_LEVEL", "INFO")
-    bundle_kms_key_id: str | None = os.environ.get("BUNDLE_KMS_KEY_ID")
-    max_bundle_input_mb: int = int(os.environ.get("MAX_BUNDLE_INPUT_MB", "100"))
-
-    @property
-    def idempotency_ttl_seconds(self) -> int:
-        return self.idempotency_ttl_days * 86_400
-
-    @property
-    def max_bundle_input_bytes(self) -> int:
-        return self.max_bundle_input_mb * 1024 * 1024
-
-
-CONFIG = EnvConfig()
-
-# ─────────────────────────────────────────────────────────────
-#  Observability primitives
-# ─────────────────────────────────────────────────────────────
-logger = Logger(
-    service="data-aggregator", level=CONFIG.log_level, log_uncaught_exceptions=True
-)
-tracer = Tracer(service="data-aggregator")
-metrics = Metrics(namespace="DataAggregator", service="data-aggregator")
+# --- Global & Reusable Components ---
+logger = Logger(service=CONFIG.service_name, level=CONFIG.log_level)
+logger.append_keys(environment=CONFIG.environment)
+tracer = Tracer(service=CONFIG.service_name)
+metrics = Metrics(namespace="DataAggregator", service=CONFIG.service_name)
 metrics.set_default_dimensions(environment=CONFIG.environment)
 
-_S3 = boto3.client("s3")
-_DYNAMODB = boto3.client("dynamodb")
+s3_boto_client = boto3.client("s3")
+s3_client = S3Client(s3_client=s3_boto_client)
+
+idempotency_persistence_layer = DynamoDBPersistenceLayer(
+    table_name=CONFIG.idempotency_table
+)
+idempotency_config = IdempotencyConfig(
+    event_key_jmespath="data.idempotency_key",
+    payload_validation_jmespath="data.s3_object.size",
+    expires_after_seconds=CONFIG.idempotency_ttl_seconds,
+    use_local_cache=True,
+    raise_on_no_idempotency_key=True,
+)
 
 
-# ─────────────────────────────────────────────────────────────
-#  Dependency container
-# ─────────────────────────────────────────────────────────────
-class Dependencies:
-    """Per‑invocation lazy clients."""
-
-    @cached_property
-    def s3_client(self) -> S3Client:
-        return S3Client(s3_client=_S3, kms_key_id=CONFIG.bundle_kms_key_id)
-
-    @cached_property
-    def dynamodb_client(self) -> DynamoDBClient:
-        return DynamoDBClient(
-            dynamo_client=_DYNAMODB,
-            table_name=CONFIG.idempotency_table,
-            ttl_attribute=CONFIG.dynamodb_ttl_attribute,
-        )
+@idempotent_function(
+    data_keyword_argument="data",
+    config=idempotency_config,
+    persistence_store=idempotency_persistence_layer,
+)
+def _process_record_idempotently(*, data: dict[str, Any]) -> bool:
+    """Wraps the idempotency check. If it runs, the item is not a duplicate."""
+    logger.debug("Idempotency check passed for new item.", extra=data)
+    return True
 
 
-# ─────────────────────────────────────────────────────────────
-#  Stage‑2 bundling helper
-# ─────────────────────────────────────────────────────────────
-@tracer.capture_method
-def _process_successful_batch(
-    successful_records: List[S3EventRecord],
-    context: LambdaContext,
-    deps: Dependencies,
-) -> None:
-    """Run pre-flight checks then call `process_and_stage_batch`."""
-    logger.debug("Stage‑2 processing", extra={"record_count": len(successful_records)})
-
-    total_input = sum(r["s3"]["object"]["size"] for r in successful_records)
-    if total_input > CONFIG.max_bundle_input_bytes:
-        raise BatchTooLargeError(f"Batch is {total_input} bytes > limit")
-
-    if context.get_remaining_time_in_millis() < 8_000:
-        raise BundlingTimeoutError("Not enough time left to bundle")
-
-    # Rename the variable for clarity and to fix the NameError
-    bundle_key = f"bundle-{context.aws_request_id}.gz"
-
-    with tracer.provider.in_subsegment("process_and_stage_bundle_subsegment"):
-        process_and_stage_batch(
-            records=successful_records,
-            s3_client=deps.s3_client,
-            distribution_bucket=CONFIG.distribution_bucket,
-            bundle_key=bundle_key,
-            context=context,
-        )
-
-    metrics.add_metric("BundlesCreated", MetricUnit.Count, 1)
-    metrics.add_metric("RecordsInBundle", MetricUnit.Count, len(successful_records))
-    logger.info("Bundle staged to distribution bucket", extra={"key": bundle_key})
-
-
-# ─────────────────────────────────────────────────────────────
-#  Lambda entry point
-# ─────────────────────────────────────────────────────────────
-@logger.inject_lambda_context(log_event=False)
-@tracer.capture_lambda_handler
-@metrics.log_metrics(capture_cold_start_metric=True)
-def handler(
-    event: Dict[str, Any], context: LambdaContext
+def build_partial_failure_response(
+    failed_message_ids: set[str],
 ) -> PartialItemFailureResponse:
-    """Main Lambda handler (SQS batch)."""
-    if not event.get("Records"):
-        logger.info("No records, nothing to do")
-        return {"batchItemFailures": []}
-
-    deps = Dependencies()
-
-    # Side‑car collectors for stage‑2
-    successful_records: list[S3EventRecord] = []
-    processed_message_ids: list[str] = []
-
-    # -----------------------------------------------------
-    # Inner record handler
-    # -----------------------------------------------------
-    def record_handler(record: SQSRecord) -> Dict | S3EventRecord:
-        try:
-            body = json.loads(record.body)
-            s3_record: S3EventRecord = cast(S3EventRecord, body["Records"][0])
-            object_key = unquote_plus(s3_record["s3"]["object"]["key"])
-        except (json.JSONDecodeError, KeyError, IndexError):
-            logger.warning("Malformed SQS message", extra={"body": record.body})
-            raise ValueError("Malformed SQS message")
-
-        hash_key = hashlib.sha256(object_key.encode()).hexdigest()
-        expiry = int(time.time()) + CONFIG.idempotency_ttl_seconds
-
-        try:
-            is_new = deps.dynamodb_client.check_and_set_idempotency(
-                idempotency_key=hash_key,
-                original_object_key=object_key,
-                ttl=expiry,
-            )
-        except ClientError as exc:
-            logger.exception("DynamoDB error during idempotency check")
-            raise TransientDynamoError from exc
-
-        if not is_new:
-            metrics.add_metric("DuplicatesSkipped", MetricUnit.Count, 1)
-            return {}
-
-        successful_records.append(s3_record)
-        processed_message_ids.append(record.message_id)
-        metrics.add_metric("NewObjectsProcessed", MetricUnit.Count, 1)
-        return s3_record
-
-    # -----------------------------------------------------
-    # BatchProcessor orchestration (stage 1)
-    # -----------------------------------------------------
-    processor = BatchProcessor(
-        event_type=EventType.SQS,
-        raise_on_entire_batch_failure=False,  # ← don’t raise; always return failures list
-    )
-
-    with processor(records=event["Records"], handler=record_handler):
-        processor.process()
-
-    batch_failures: List[PartialItemFailures] = processor.response()[
-        "batchItemFailures"
+    """
+    Given a set of SQS message IDs, return the structure that the
+    Lambda partial batch response API expects.
+    """
+    # Use cast to explicitly tell the type checker the shape of the dictionary.
+    # This is the most direct way to resolve the type error.
+    failures = [
+        cast(PartialItemFailures, {"itemIdentifier": mid}) for mid in failed_message_ids
     ]
 
-    logger.debug(
-        "Stage‑1 complete",
+    response = cast(PartialItemFailureResponse, {"batchItemFailures": failures})
+
+    return response
+
+
+def _get_message_ids_for_s3_records(
+    s3_records: List[S3EventRecord],
+    record_to_message_id_map: dict[str, set[str]],
+) -> Set[str]:
+    """Finds all unique SQS message IDs for a given list of S3 records."""
+    message_ids: Set[str] = set()
+    for record in s3_records:
+        s3_key = record["s3"]["object"]["key"]
+        s3_version = record["s3"]["object"].get("versionId")
+        unique_record_key = f"{s3_key}#{s3_version}" if s3_version else s3_key
+
+        # Find the set of message IDs for this record and add them to our main set
+        ids_for_record = record_to_message_id_map.get(unique_record_key, set())
+        message_ids.update(ids_for_record)
+
+    return message_ids
+
+
+def _process_valid_records(
+    records_to_process: List[S3EventRecord],
+    record_to_message_id_map: dict[str, set[str]],
+    context: LambdaContext,
+) -> Set[str]:
+    """Takes valid S3 records, bundles them, and returns SQS message IDs for any unprocessed records."""
+    now = datetime.now(timezone.utc)
+    bundle_key = f"{now.strftime('%Y/%m/%d/%H')}/bundle-{context.aws_request_id}.tar.gz"
+
+    _, _, remaining_records = process_and_stage_batch(
+        records=records_to_process,
+        s3_client=s3_client,
+        distribution_bucket=CONFIG.distribution_bucket,
+        bundle_key=bundle_key,
+        context=context,
+    )
+
+    processed_count = len(records_to_process) - len(remaining_records)
+    metrics.add_metric(
+        name="ProcessedRecordsInBundle", unit=MetricUnit.Count, value=processed_count
+    )
+
+    if not remaining_records:
+        return set()
+
+    metrics.add_metric(
+        name="RemainingRecordsForRetry",
+        unit=MetricUnit.Count,
+        value=len(remaining_records),
+    )
+    logger.warning(
+        "Some records were not processed due to constraints and will be retried.",
         extra={
-            "success_count": len(successful_records),
-            "failure_count": len(batch_failures),
+            "remaining_count": len(remaining_records),
+            "example_keys": [r["s3"]["object"]["key"] for r in remaining_records[:3]],
         },
     )
 
-    # -----------------------------------------------------
-    # Stage‑2 bundling
-    # -----------------------------------------------------
-    if successful_records:
+    return _get_message_ids_for_s3_records(remaining_records, record_to_message_id_map)
+
+
+@logger.inject_lambda_context(log_event=True, correlation_id_path="aws_request_id")
+@tracer.capture_lambda_handler
+@metrics.log_metrics(capture_cold_start_metric=True)
+def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
+    """Main Lambda handler to process a batch of S3 events from SQS."""
+    sqs_records: list[dict] = event.get("Records", [])
+    if not sqs_records:
+        logger.warning("Event did not contain any SQS records. Exiting gracefully.")
+        return {"batchItemFailures": []}
+
+    # --- Setup tracking variables ---
+    records_to_process: List[S3EventRecord] = []
+    failed_message_ids: Set[str] = set()
+    record_to_message_id_map: dict[str, set[str]] = {}
+
+    # --- 1. First Pass: Parse, build lookup map, and run idempotency checks ---
+    for sqs_record in sqs_records:
+        message_id = sqs_record["messageId"]
         try:
-            _process_successful_batch(successful_records, context, deps)
-        except SQSBatchProcessingError:
-            logger.error(
-                "Bundling failed — flagging processed items for retry", exc_info=True
+            # Parse the message body only once
+            s3_event = json.loads(sqs_record["body"])
+            s3_records = s3_event.get("Records")
+            if not s3_records:
+                raise KeyError("'Records' list is missing or empty.")
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(
+                "Failed to parse SQS message body.",
+                extra={"messageId": message_id, "error": str(e)},
             )
-            for msg_id in processed_message_ids:
-                batch_failures.append({"itemIdentifier": msg_id})
+            failed_message_ids.add(message_id)
+            continue
 
-    # All duplicates – nothing sent or failed
-    if not successful_records and not batch_failures:
-        metrics.add_metric("DuplicateOnlyBatch", MetricUnit.Count, 1)
-        logger.info("Batch contained only duplicates")
+        for s3_record in s3_records:
+            idempotency_key = ""
+            try:
+                # Build the lookup map and idempotency key simultaneously
+                s3_object = s3_record["s3"]["object"]
+                s3_key = s3_object["key"]
+                s3_version = s3_object.get("versionId")
+                unique_record_key = f"{s3_key}#{s3_version}" if s3_version else s3_key
 
-    logger.info("Batch finished", extra={"final_failure_count": len(batch_failures)})
-    return {"batchItemFailures": batch_failures}
+                # Populate the map for reverse lookups later
+                record_to_message_id_map.setdefault(unique_record_key, set()).add(
+                    message_id
+                )
+
+                # Run idempotency check
+                idempotency_key = (
+                    f"{s3_record['s3']['bucket']['name']}/{unique_record_key}"
+                )
+                payload = {"idempotency_key": idempotency_key, "s3_object": s3_object}
+                _process_record_idempotently(data=payload)
+
+                # If the check passes, add the record to our processing list
+                records_to_process.append(s3_record)
+
+            except IdempotencyItemAlreadyExistsError:
+                metrics.add_metric(
+                    name="FailedIdempotencyChecks", unit=MetricUnit.Count, value=1
+                )
+                logger.info(
+                    "Skipping duplicate S3 object.",
+                    extra={"idempotency_key": idempotency_key},
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to process an S3 record.", extra={"messageId": message_id}
+                )
+                failed_message_ids.add(message_id)
+
+    # --- 2. If no new valid records, exit now ---
+    if not records_to_process:
+        logger.info("No new records to process after filtering duplicates and errors.")
+        return build_partial_failure_response(failed_message_ids)
+
+    # --- 3. Process the valid batch ---
+    try:
+        unprocessed_ids = _process_valid_records(
+            records_to_process, record_to_message_id_map, context
+        )
+        failed_message_ids.update(unprocessed_ids)
+    except Exception:
+        # If bundling fails catastrophically, fail all messages that had valid records
+        logger.exception("A non-recoverable error occurred during bundling.")
+        all_contributing_message_ids = _get_message_ids_for_s3_records(
+            records_to_process, record_to_message_id_map
+        )
+        return build_partial_failure_response(all_contributing_message_ids)
+
+    # --- 4. Return the final result ---
+    if failed_message_ids:
+        return build_partial_failure_response(failed_message_ids)
+
+    return {"batchItemFailures": []}

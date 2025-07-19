@@ -72,7 +72,7 @@ idempotency_config = IdempotencyConfig(
 
 # Set the primary key name for the persistence layer that the idempotency utility will use.
 # THIS IS CRITICAL. The idempotency decorator will now look for 'object_key' in its config.
-idempotency_config.jmespath_options = {"idempotency_key_jmespath": "idempotency_key"}
+# idempotency_config.jmespath_options = {"idempotency_key_jmespath": "idempotency_key"}
 idempotency_persistence_layer.configure(config=idempotency_config)
 
 @idempotent_function(

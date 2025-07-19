@@ -48,11 +48,11 @@ from .schemas import S3EventRecord
 CONFIG = get_config()
 
 logger = Logger(service=CONFIG.service_name, level=CONFIG.log_level)
-# REMOVED: Redundant key. Set shared dimensions on Metrics only.
-# logger.append_keys(environment=CONFIG.environment)
 tracer = Tracer(service=CONFIG.service_name)
-metrics = Metrics(namespace="DataAggregator", service=CONFIG.service_name)
-metrics.set_default_dimensions(environment=CONFIG.environment)
+metrics = Metrics(
+    namespace="DataAggregator",
+    service=CONFIG.service_name,
+)
 
 s3_boto_client = boto3.client("s3")
 s3_client = S3Client(s3_client=s3_boto_client)
@@ -159,7 +159,7 @@ def _process_valid_records(
 @metrics.log_metrics(capture_cold_start_metric=True)
 def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
     """Main Lambda handler to process a batch of S3 events from SQS."""
-    # FIX 2: Register the Lambda context for idempotency timeout calculations
+    metrics.add_dimension("environment", CONFIG.environment)
     idempotency_config.register_lambda_context(context)
 
     sqs_records: list[dict] = event.get("Records", [])

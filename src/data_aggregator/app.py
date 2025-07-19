@@ -48,6 +48,8 @@ from .schemas import S3EventRecord
 CONFIG = get_config()
 
 logger = Logger(service=CONFIG.service_name, level=CONFIG.log_level)
+# REMOVED: Redundant key. Set shared dimensions on Metrics only.
+# logger.append_keys(environment=CONFIG.environment)
 tracer = Tracer(service=CONFIG.service_name)
 metrics = Metrics(namespace="DataAggregator", service=CONFIG.service_name)
 metrics.set_default_dimensions(environment=CONFIG.environment)
@@ -56,16 +58,25 @@ s3_boto_client = boto3.client("s3")
 s3_client = S3Client(s3_client=s3_boto_client)
 
 idempotency_persistence_layer = DynamoDBPersistenceLayer(
-    table_name=CONFIG.idempotency_table
+    table_name=CONFIG.idempotency_table,
+    # FIX 1: Specify the primary key attribute name of your DynamoDB table
+    key_attr="object_key",
 )
+
 idempotency_config = IdempotencyConfig(
+    # NOTE: JMESPath for the IDEMPOTENCY KEY. This is what's used to populate the 'object_key' attribute.
     event_key_jmespath="idempotency_key",
-    payload_validation_jmespath="data.s3_object.size",
+    # NOTE: JMESPath for payload validation.
+    payload_validation_jmespath="s3_object.size",
     expires_after_seconds=CONFIG.idempotency_ttl_seconds,
     use_local_cache=True,
     raise_on_no_idempotency_key=True,
 )
 
+# Set the primary key name for the persistence layer that the idempotency utility will use.
+# THIS IS CRITICAL. The idempotency decorator will now look for 'object_key' in its config.
+idempotency_config.jmespath_options = {"idempotency_key_jmespath": "idempotency_key"}
+idempotency_persistence_layer.configure(config=idempotency_config)
 
 @idempotent_function(
     data_keyword_argument="data",
@@ -85,14 +96,10 @@ def build_partial_failure_response(
     Given a set of SQS message IDs, return the structure that the
     Lambda partial batch response API expects.
     """
-    # Use cast to explicitly tell the type checker the shape of the dictionary.
-    # This is the most direct way to resolve the type error.
     failures = [
         cast(PartialItemFailures, {"itemIdentifier": mid}) for mid in failed_message_ids
     ]
-
     response = cast(PartialItemFailureResponse, {"batchItemFailures": failures})
-
     return response
 
 
@@ -106,11 +113,8 @@ def _get_message_ids_for_s3_records(
         s3_key = record["s3"]["object"]["key"]
         s3_version = record["s3"]["object"].get("versionId")
         unique_record_key = f"{s3_key}#{s3_version}" if s3_version else s3_key
-
-        # Find the set of message IDs for this record and add them to our main set
         ids_for_record = record_to_message_id_map.get(unique_record_key, set())
         message_ids.update(ids_for_record)
-
     return message_ids
 
 
@@ -160,6 +164,9 @@ def _process_valid_records(
 @metrics.log_metrics(capture_cold_start_metric=True)
 def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
     """Main Lambda handler to process a batch of S3 events from SQS."""
+    # FIX 2: Register the Lambda context for idempotency timeout calculations
+    idempotency_config.register_lambda_context(context)
+
     sqs_records: list[dict] = event.get("Records", [])
     if not sqs_records:
         logger.warning("Event did not contain any SQS records. Exiting gracefully.")
@@ -174,7 +181,6 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
     for sqs_record in sqs_records:
         message_id = sqs_record["messageId"]
         try:
-            # Parse the message body only once
             s3_event = json.loads(sqs_record["body"])
             s3_records = s3_event.get("Records")
             if not s3_records:
@@ -190,25 +196,21 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
         for s3_record in s3_records:
             idempotency_key = ""
             try:
-                # Build the lookup map and idempotency key simultaneously
                 s3_object = s3_record["s3"]["object"]
                 s3_key = s3_object["key"]
                 s3_version = s3_object.get("versionId")
                 unique_record_key = f"{s3_key}#{s3_version}" if s3_version else s3_key
 
-                # Populate the map for reverse lookups later
                 record_to_message_id_map.setdefault(unique_record_key, set()).add(
                     message_id
                 )
 
-                # Run idempotency check
                 idempotency_key = (
                     f"{s3_record['s3']['bucket']['name']}/{unique_record_key}"
                 )
                 payload = {"idempotency_key": idempotency_key, "s3_object": s3_object}
                 _process_record_idempotently(data=payload)
 
-                # If the check passes, add the record to our processing list
                 records_to_process.append(s3_record)
 
             except IdempotencyItemAlreadyExistsError:
@@ -237,7 +239,6 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
         )
         failed_message_ids.update(unprocessed_ids)
     except Exception:
-        # If bundling fails catastrophically, fail all messages that had valid records
         logger.exception("A non-recoverable error occurred during bundling.")
         all_contributing_message_ids = _get_message_ids_for_s3_records(
             records_to_process, record_to_message_id_map

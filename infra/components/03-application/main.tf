@@ -42,7 +42,7 @@ resource "aws_iam_policy" "aggregator_lambda_policy" {
         Resource = "${data.terraform_remote_state.stateful.outputs.distribution_bucket_arn}/*"
       },
       {
-        Action   = ["dynamodb:GetItem", "dynamodb:PutItem"]
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"]
         Effect   = "Allow"
         Resource = data.terraform_remote_state.stateful.outputs.idempotency_table_arn
       },

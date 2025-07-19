@@ -59,7 +59,6 @@ s3_client = S3Client(s3_client=s3_boto_client)
 
 idempotency_persistence_layer = DynamoDBPersistenceLayer(
     table_name=CONFIG.idempotency_table,
-    # FIX 1: Specify the primary key attribute name of your DynamoDB table
     key_attr="object_key",
 )
 

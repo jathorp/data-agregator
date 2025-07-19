@@ -129,6 +129,7 @@ resource "aws_lambda_function" "aggregator" {
       LOG_LEVEL                = var.log_level
       IDEMPOTENCY_TTL_DAYS     = var.idempotency_ttl_days
       SERVICE_NAME             = var.project_name
+      ENVIRONMENT              = var.environment_name
     }
   }
 

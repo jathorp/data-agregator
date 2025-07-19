@@ -1,15 +1,13 @@
-# src/data_aggregator/config.py
-
 import logging
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
 
 class ConfigurationError(Exception):
     """Custom exception for configuration-related errors."""
-
     pass
 
 
@@ -20,6 +18,7 @@ class AppConfig:
     # --- Required Variables ---
     distribution_bucket: str
     service_name: str
+    environment: str
     idempotency_table: str
 
     # --- Optional Variables with Defaults ---
@@ -46,6 +45,7 @@ class AppConfig:
             # --- Handle required string variables ---
             distribution_bucket = os.environ["DISTRIBUTION_BUCKET_NAME"]
             service_name = os.environ["SERVICE_NAME"]
+            environment = os.environ["ENVIRONMENT"]
             idempotency_table = os.environ["IDEMPOTENCY_TABLE_NAME"]
 
             # --- Handle optional and numeric variables with validation ---
@@ -77,6 +77,7 @@ class AppConfig:
         return cls(
             distribution_bucket=distribution_bucket,
             service_name=service_name,
+            environment=environment,
             idempotency_table=idempotency_table,
             idempotency_ttl_days=idempotency_ttl_days,
             max_bundle_input_mb=max_bundle_input_mb,
@@ -84,11 +85,13 @@ class AppConfig:
         )
 
 
-# --- Singleton Instance ---
-try:
-    CONFIG = AppConfig.load_from_env()
-except ConfigurationError as e:
-    # The Lambda runtime will see the raised exception and report an Init error.
-    logger.critical("Failed to load application configuration", exc_info=e)
-
-    raise
+# --- Singleton Factory Function (Lazy-loaded and Cached) ---
+@lru_cache(maxsize=1)
+def get_config() -> AppConfig:
+    """
+    Loads the application configuration from environment variables.
+    The result is cached using lru_cache, so the environment is only read once
+    on the first call. This avoids import-time side effects.
+    """
+    logger.info("Loading application configuration from environment...")
+    return AppConfig.load_from_env()

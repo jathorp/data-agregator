@@ -40,11 +40,13 @@ from aws_lambda_powertools.utilities.idempotency.persistence.dynamodb import (
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from .clients import S3Client
-from .config import CONFIG
+from .config import get_config
 from .core import process_and_stage_batch
 from .schemas import S3EventRecord
 
 # --- Global & Reusable Components ---
+CONFIG = get_config()
+
 logger = Logger(service=CONFIG.service_name, level=CONFIG.log_level)
 logger.append_keys(environment=CONFIG.environment)
 tracer = Tracer(service=CONFIG.service_name)

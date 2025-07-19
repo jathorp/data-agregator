@@ -1,6 +1,6 @@
 [project]
 name = "data-aggregator"
-version = "0.1.0"
+version = "0.2.0"
 description = "Sync data between S3 and MinIO with aggregation and compresseion"
 readme = "README.md"
 authors = [
@@ -23,6 +23,7 @@ dev = [
   "ruff>=0.12.1",
   "boto3>=1.39.1",
   "rich>=14.0.0",
+  "pytest-env>=1.1.5",
 ]
 
 [project.scripts]
@@ -40,6 +41,16 @@ markers = [
     "blackbox: marks tests as black-box end-to-end tests",
     "integration: marks tests as integration tests"
 ]
+env = [
+    "AWS_REGION=us-east-1",
+    "DISTRIBUTION_BUCKET_NAME=mock-distribution-bucket",
+    "IDEMPOTENCY_TABLE_NAME=mock-idempotency-table",
+    "IDEMPOTENCY_TTL_SECONDS=3600",
+    "SERVICE_NAME=DataAggregator",
+    "LOG_LEVEL=DEBUG",
+    "ENVIRONMENT=test"
+]
+
 
 [tool.mypy]
 plugins = ["mypy_boto3_plugin.main"]

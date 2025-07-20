@@ -132,39 +132,23 @@ def create_tar_gz_bundle_stream(
     processed_records: List[S3EventRecord] = []
     bytes_written = 0
 
-    logger.warning(f"Starting a TEST. Info should be debugging.")
-
     try:
         with tarfile.open(
                 mode="w:gz",
                 fileobj=cast(BinaryIO, hashing_writer),
                 format=tarfile.PAX_FORMAT,
         ) as tar:
-            logger.warning(f"Starting to process a batch of {len(records)} records.")
+            logger.debug(f"Starting to process a batch of {len(records)} records.")
 
             for i, record in enumerate(records):
                 # --- START OF THE TRY BLOCK FOR A SINGLE RECORD ---
-                logger.warning(f"Starting to process a record {i}.")
                 try:
-                    remaining_time_ms = context.get_remaining_time_in_millis()
-                    logger.warning(
-                        f"Record {i+1}/{len(records)}: "
-                        f"Remaining time is {remaining_time_ms}ms. "
-                        f"Threshold is {TIMEOUT_GUARD_THRESHOLD_MS}ms."
-                    )
-
                     # 1. Gracefully stop if nearing timeout
                     if context.get_remaining_time_in_millis() < TIMEOUT_GUARD_THRESHOLD_MS:
                         logger.warning("Timeout threshold reached. Finalizing bundle.")
                         break
 
                     metadata_size = record["s3"]["object"]["size"]
-                    logger.warning(
-                        f"Record {i+1}: "
-                        f"Current bundle size is {bytes_written} bytes. "
-                        f"Next file size is {metadata_size} bytes. "
-                        f"Limit is {MAX_BUNDLE_ON_DISK_BYTES} bytes."
-                    )
 
                     # 2. Gracefully stop if predicted disk usage is too high
                     if (bytes_written + metadata_size) > MAX_BUNDLE_ON_DISK_BYTES:
@@ -223,7 +207,7 @@ def create_tar_gz_bundle_stream(
                 except ObjectNotFoundError:
                     # This gracefully handles the case where the S3 object was deleted
                     # between the event notification and this processing step.
-                    logger.warning(
+                    logger.debug(
                         "S3 object for record not found, it may have been deleted. Skipping.",
                         extra={"key": record["s3"]["object"]["key"]},
                     )
@@ -240,7 +224,7 @@ def create_tar_gz_bundle_stream(
                     continue  # Also move to the next record
                 # --- END OF THE EXCEPTION HANDLING BLOCK ---
 
-        # 6. Finalize and yield results (this part is unchanged)
+        # 6. Finalize and yield results
         logger.info(
             f"Finished processing batch. Added {len(processed_records)} records to bundle."
         )

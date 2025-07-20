@@ -1,5 +1,5 @@
 {
-  "description": "Simulates recovery from a backlog by uploading 1000 small, compressible files with high concurrency./n Validates the system's ability to scale out and process the entire backlog correctly.",
+  "description": "Simulates recovery from a backlog by uploading 1000 small, compressible files with high concurrency. Validates the system's ability to scale out and process the entire backlog correctly.",
   "generator_type": "compressible",
   "landing_bucket": "data-aggregator-landing-dev",
   "distribution_bucket": "data-aggregator-distribution-dev",

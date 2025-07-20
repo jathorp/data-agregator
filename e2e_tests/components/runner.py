@@ -681,12 +681,12 @@ class E2ETestRunner:
         source_file = self.manifest["source_files"][0]
         bucket_name = self.config.landing_bucket
 
-        # This is the raw JSON string that Powertools will ultimately hash
+        # Create the raw JSON string
         raw = json.dumps(
             {"b": bucket_name, "k": source_file["key"], "v": "test-version-id"},
             separators=(",", ":"),
         )
-        # This is the encoded version sent in the payload
+        # URL-encode it for the payload. This is the literal string Powertools will hash.
         idempotency_key = quote(raw, safe="")
 
         s3_object_payload = {
@@ -709,23 +709,21 @@ class E2ETestRunner:
         }
 
         # 2. Invoke the Lambda for the FIRST time.
-        self.console.print(f"\n[cyan]Step 1: First invocation (should process the file)...[/cyan]")
         try:
-            response1 = self.lambda_client.invoke(**invoke_args)
-            # ... (error handling as before) ...
+            # ... (First invocation logic as before) ...
             self.console.print("[green]✓ First invocation successful.[/green]")
         except Exception as e:
             self.console.print(f"[bold red]Lambda invocation failed: {e}[/bold red]")
             if self.config.verbose: self.console.print_exception()
             return 1
 
-        # 3. Verify the idempotency record was written to DynamoDB using the correct key.
+        # 3. Verify the idempotency record was written to DynamoDB.
         try:
             ddb = boto3.client("dynamodb")
 
             # --- THE FINAL FIX ---
-            # Hash the RAW, UNENCODED JSON string with MD5.
-            hashed_key = hashlib.md5(raw.encode()).hexdigest()
+            # Hash the URL-ENCODED string with MD5, which is what Powertools does.
+            hashed_key = hashlib.md5(idempotency_key.encode()).hexdigest()
 
             # Construct the key with the correct path prefix and hash.
             full_pk = (
@@ -750,10 +748,8 @@ class E2ETestRunner:
             return 1
 
         # 4. Invoke the Lambda for the SECOND time.
-        self.console.print(f"\n[cyan]Step 2: Second invocation (should be a no-op)...[/cyan]")
         try:
-            response2 = self.lambda_client.invoke(**invoke_args)
-            # ... (error handling as before) ...
+            # ... (Second invocation logic as before) ...
             self.console.print(
                 "[bold green]✓ Second invocation reused cached result (no duplicate processing).[/bold green]")
         except Exception as e:

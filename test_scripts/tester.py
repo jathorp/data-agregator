@@ -181,93 +181,72 @@ class E2ETestRunner:
         end_time = time.time() + self.config.timeout_seconds
 
         with Progress(
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TimeElapsedColumn(),
-            console=self.console,
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TimeElapsedColumn(),
+                console=self.console
         ) as progress:
             timeout_task = progress.add_task(
                 f"[yellow]Polling for bundles (timeout in {self.config.timeout_seconds}s)",
-                total=self.config.timeout_seconds,
+                total=self.config.timeout_seconds
             )
 
             while time.time() < end_time:
                 # Check for completion first
-                extracted_files = {
-                    f"{self.s3_prefix}/{p.name}"
-                    for p in self.extracted_dir.glob("*")
-                    if p.is_file()
-                }
+                extracted_files = {f"{self.s3_prefix}/{p.name}" for p in self.extracted_dir.glob("*") if p.is_file()}
                 if expected_keys.issubset(extracted_files):
-                    progress.update(
-                        timeout_task,
-                        completed=self.config.timeout_seconds,
-                        description="[green]All expected files found!",
-                    )
+                    progress.update(timeout_task, completed=self.config.timeout_seconds,
+                                    description="[green]All expected files found!")
                     return
 
-                response = self.s3.list_objects_v2(
-                    Bucket=self.config.distribution_bucket, Prefix="bundle-"
-                )
+                # --- THIS IS THE KEY CHANGE ---
+                # Remove the restrictive prefix to search the entire bucket.
+                # We will filter for bundle files in the code below.
+                response = self.s3.list_objects_v2(Bucket=self.config.distribution_bucket)
+
+                # Filter for new bundles based on the filename pattern
                 new_bundles = [
-                    obj
-                    for obj in response.get("Contents", [])
-                    if obj["Key"] not in self.processed_bundle_keys
+                    obj for obj in response.get("Contents", [])
+                    if "bundle-" in obj["Key"] and obj["Key"] not in self.processed_bundle_keys
                 ]
+
+                if not new_bundles:
+                    # If no new bundles are found, just update the progress and sleep
+                    progress.update(timeout_task, advance=2)
+                    time.sleep(2)
+                    continue
 
                 for bundle_obj in new_bundles:
                     bundle_key = bundle_obj["Key"]
                     progress.log(f"Processing bundle: [magenta]{bundle_key}[/magenta]")
                     local_bundle_path = self.local_workspace / Path(bundle_key).name
 
-                    # --- GRACEFUL ERROR HANDLING ---
-                    # We wrap the download and extraction in a try block to handle
-                    # issues like network errors or corrupted files without crashing.
                     try:
-                        self.s3.download_file(
-                            self.config.distribution_bucket,
-                            bundle_key,
-                            str(local_bundle_path),
-                        )
+                        self.s3.download_file(self.config.distribution_bucket, bundle_key, str(local_bundle_path))
                         self.processed_bundle_keys.add(bundle_key)
 
                         with tarfile.open(local_bundle_path, "r:gz") as tar:
                             tar.extractall(path=self.extracted_dir)
-                        progress.log(
-                            f"  [green]✓[/green] Successfully extracted [magenta]{bundle_key}[/magenta]."
-                        )
+                        progress.log(f"  [green]✓[/green] Successfully extracted [magenta]{bundle_key}[/magenta].")
 
                     except tarfile.ReadError as e:
-                        # This catches the exact error you saw.
                         progress.log(
                             f"  [bold red]✗ ERROR:[/] Failed to read bundle [magenta]{bundle_key}[/]. "
                             f"The file is likely corrupt or incomplete. (Details: {e})"
                         )
                     except Exception as e:
-                        # Catch any other unexpected errors during download/extraction.
                         progress.log(
                             f"  [bold red]✗ ERROR:[/] An unexpected error occurred with bundle [magenta]{bundle_key}[/]. "
                             f"(Details: {e})"
                         )
 
-                progress.update(timeout_task, advance=2)
-                time.sleep(2)
-
-        # If the loop finishes without finding all files, it's a timeout.
-        # We now check if any files were extracted at all.
-        if not any(self.extracted_dir.iterdir()):
-            self.console.print(
-                "[bold red]Polling timed out. No valid bundles were downloaded and extracted.[/bold red]"
-            )
-        else:
-            self.console.print(
-                "[bold yellow]Polling timed out. Not all expected files were found in the downloaded bundles.[/bold yellow]"
-            )
-
-        # We no longer raise a TimeoutError here. Instead, we let the test proceed to the
-        # validation phase, which will correctly report the missing files and fail the test.
-
-        # Add this new method inside the E2ETestRunner class
+            # If the loop finishes, handle the timeout message
+            if not any(self.extracted_dir.iterdir()):
+                self.console.print(
+                    "[bold red]Polling timed out. No valid bundles were downloaded and extracted.[/bold red]")
+            else:
+                self.console.print(
+                    "[bold yellow]Polling timed out. Not all expected files were found in the downloaded bundles.[/bold yellow]")
 
     def _verify_aws_connectivity(self):
         """

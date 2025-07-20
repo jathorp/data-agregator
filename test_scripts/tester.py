@@ -109,6 +109,12 @@ class E2ETestRunner:
     def _generate_file_and_hash(self, path: Path) -> str:
         """Creates a local file of a given size and returns its SHA256 hash."""
         hasher = hashlib.sha256()
+
+        if self.config.size_mb == 0:
+            path.touch() # Create an empty file
+            # The hash of an empty string
+            return "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
         with open(path, "wb") as f:
             for _ in range(self.config.size_mb):
                 chunk = os.urandom(CHUNK_SIZE)

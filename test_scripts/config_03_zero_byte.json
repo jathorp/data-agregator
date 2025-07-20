@@ -1,0 +1,10 @@
+{
+  "landing_bucket": "data-aggregator-landing-dev",
+  "distribution_bucket": "data-aggregator-distribution-dev",
+  "num_files": 5,
+  "size_mb": 0,
+  "concurrency": 5,
+  "timeout_seconds": 300,
+  "report_file": "results_03_zero_byte.xml",
+  "verbose": false
+}

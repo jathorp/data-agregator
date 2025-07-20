@@ -1,0 +1,11 @@
+{
+  "description": "It ensures the core batching logic works. We'll use a decent number of files but keep them small to test the batching mechanism itself, not memory pressure.",
+  "landing_bucket": "data-aggregator-landing-dev",
+  "distribution_bucket": "data-aggregator-distribution-dev",
+  "num_files": 50,
+  "size_mb": 1,
+  "concurrency": 16,
+  "timeout_seconds": 300,
+  "report_file": "results_01_batching.xml",
+  "verbose": false
+}

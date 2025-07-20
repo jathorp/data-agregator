@@ -87,6 +87,8 @@ class E2ETestRunner:
 
         self.s3 = boto3.client("s3")
         self.console = Console()
+        self.manifest: Optional[TestManifest] = None
+
         self.run_id = f"e2e-test-{uuid.uuid4().hex[:8]}"
 
         # Set the S3 prefix based on the test type to isolate test data.
@@ -179,7 +181,10 @@ class E2ETestRunner:
 
         with open(self.local_workspace / MANIFEST_FILENAME, "w") as f:
             json.dump(manifest, f, indent=2)
-        return manifest
+
+        self.manifest = manifest
+
+        return self.manifest
 
     def _consume_and_download(self, manifest: TestManifest):
         """
@@ -397,13 +402,13 @@ class E2ETestRunner:
         ET.indent(tree, space="  ")
         tree.write(self.config.report_file, encoding="utf-8", xml_declaration=True)
 
-    def _cleanup(self, manifest: Optional[TestManifest] = None):
+    def _cleanup(self):
         """Cleans up all resources: S3 source/distribution objects and local workspace."""
         self.console.print("\n--- [bold yellow]Cleanup Phase[/bold yellow] ---")
 
         # 1. Clean up source files from landing bucket
-        if manifest and manifest.get("source_files"):
-            keys_to_delete = [{"Key": obj["key"]} for obj in manifest["source_files"]]
+        if self.manifest and self.manifest.get("source_files"):
+            keys_to_delete = [{"Key": obj["key"]} for obj in self.manifest["source_files"]]
             for i in range(0, len(keys_to_delete), 1000):
                 chunk = keys_to_delete[i : i + 1000]
                 self.s3.delete_objects(
@@ -510,7 +515,6 @@ class E2ETestRunner:
 
     def run(self) -> int:
         """Executes the full test lifecycle."""
-        manifest = None
         try:
             self.console.print(
                 Panel(
@@ -528,17 +532,17 @@ class E2ETestRunner:
             if self.config.test_type == "direct_invoke":
                 return self._run_direct_invoke_test()
 
-            manifest = self._produce_and_upload()
+            self.manifest = self._produce_and_upload()
             self.console.print(
                 "[green]✓ Producer finished.[/green] All source files uploaded."
             )
 
-            self._consume_and_download(manifest)
+            self._consume_and_download(self.manifest)
             self.console.print(
                 "[green]✓ Consumer finished.[/green] All bundles processed."
             )
 
-            results = self._validate_results(manifest)
+            results = self._validate_results(self.manifest)
             self._display_and_report(results)
 
             return 0 if all(r["status"] == "PASS" for r in results) else 1
@@ -573,7 +577,8 @@ class E2ETestRunner:
             return 1
 
         finally:
-            self._cleanup(manifest)
+            if self.manifest:
+                self._cleanup()
 
     def _run_direct_invoke_test(self) -> int:
         """

@@ -125,7 +125,7 @@ def create_tar_gz_bundle_stream(
     Yields the bundle stream, its hash, and a list of the records that were
     successfully processed into the bundle.
     """
-    output_spool_file: BinaryIO = SpooledTemporaryFile(
+    output_spool_file: BinaryIO = SpooledTemporaryFile(  # type: ignore[assignment]
         max_size=SPOOL_FILE_MAX_SIZE_BYTES, mode="w+b"
     )
     hashing_writer = HashingFileWrapper(output_spool_file)

@@ -71,7 +71,7 @@ idempotency_config = IdempotencyConfig(
 )
 
 # Set the primary key name for the persistence layer that the idempotency utility will use.
-# idempotency_persistence_layer.configure(config=idempotency_config)
+idempotency_persistence_layer.configure(config=idempotency_config)
 
 @idempotent_function(
     data_keyword_argument="data",
@@ -168,15 +168,18 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
     if "e2e_idempotency_check_payload" in event:
         logger.info("Direct invocation for idempotency check detected.")
         payload_for_decorator = event["e2e_idempotency_check_payload"]
+
+        # This handler does NOT call the function twice. The *tester* calls this handler twice.
+        # This handler's only job is to process the record. The decorator will handle raising
+        # the exception on the second call, which is what the tester is looking for.
         try:
-            # First call - should succeed
-            _process_record_idempotently(data=payload_for_decorator)
-            # Second call - should raise the exception
             _process_record_idempotently(data=payload_for_decorator)
         except IdempotencyItemAlreadyExistsError:
-            # This is the EXPECTED outcome for the second call.
-            logger.info("Successfully caught expected IdempotencyItemAlreadyExistsError.")
-            metrics.add_metric(name="IdempotencyCheckTestSuccess", unit=MetricUnit.Count, value=1)
+            # When the tester calls this handler the *second* time, this block will execute.
+            # We log a specific message so the tester can verify the correct error was caught.
+            logger.info("Idempotency check correctly caught a duplicate item.")
+            # We must re-raise the exception so the Lambda invocation fails, which the tester expects.
+            raise
 
         return {"batchItemFailures": []}
 
@@ -189,10 +192,12 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
 
     # --- Path 3: Default path for real SQS messages ---
     else:
+        # This block contains your complete, unchanged, and correct SQS processing logic.
         sqs_records: list[dict] = event.get("Records", [])
         if not sqs_records:
             logger.warning("Event did not contain any SQS records. Exiting gracefully.")
             return {"batchItemFailures": []}
+
 
         # --- Setup tracking variables ---
         records_to_process: List[S3EventRecord] = []

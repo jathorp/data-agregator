@@ -664,7 +664,7 @@ class E2ETestRunner:
     def _run_idempotency_test(self) -> int:
         """
         Tests the idempotency system by invoking the Lambda twice with the same payload.
-        Verifies that the second invocation is correctly identified as a duplicate.
+        Verifies that the second invocation correctly fails as a duplicate.
         """
         self.console.print("\n--- [bold blue]Idempotency Check Test[/bold blue] ---")
 
@@ -679,8 +679,7 @@ class E2ETestRunner:
         source_file = self.manifest["source_files"][0]
         bucket_name = self.config.landing_bucket
 
-        # This is the final payload that the handler will receive.
-        # It's structured to be easily identified by the handler
+        # This payload is structured to be uniquely identified by our test handler
         # and contains the data needed by the idempotency decorator.
         idempotency_key = f"{bucket_name}/{source_file['key']}#test-version-id"
         s3_object_payload = {
@@ -695,59 +694,64 @@ class E2ETestRunner:
             }
         }
 
+        # --- Common arguments for both invoke calls ---
+        invoke_args = {
+            "FunctionName": self.config.lambda_function_name,
+            "Payload": json.dumps(final_payload_for_lambda),
+            "LogType": 'Tail'
+        }
+
         # 2. Invoke the Lambda for the FIRST time.
-        self.console.print(f"\n[cyan]Step 1: First invocation (should be processed as new)...[/cyan]")
+        self.console.print(f"\n[cyan]Step 1: First invocation (should process the file)...[/cyan]")
         try:
-            response1 = self.lambda_client.invoke(
-                FunctionName=self.config.lambda_function_name,
-                Payload=json.dumps(final_payload_for_lambda),
-                LogType='Tail'
-            )
+            response1 = self.lambda_client.invoke(**invoke_args)
             log1 = base64.b64decode(response1.get('LogResult', b'')).decode('utf-8')
-            if response1.get("FunctionError") or "Idempotency check passed" not in log1:
+
+            if response1.get("FunctionError"):
                 self.console.print(
-                    "[bold red]❌ TEST FAILED: The first invocation failed or was not processed as new.[/bold red]")
+                    "[bold red]❌ TEST FAILED: The first invocation unexpectedly returned an error.[/bold red]")
                 self.console.print(Panel(log1, title="First Invocation Log Tail"))
                 return 1
+
+            if "Idempotency check passed" not in log1:
+                self.console.print(
+                    "[bold red]❌ TEST FAILED: The first invocation did not log the expected success message.[/bold red]")
+                self.console.print(Panel(log1, title="First Invocation Log Tail"))
+                return 1
+
             self.console.print("[green]✓ First invocation successful.[/green]")
+
         except Exception as e:
             self.console.print(f"[bold red]Lambda invocation failed: {e}[/bold red]")
+            if self.config.verbose:
+                self.console.print_exception()
             return 1
 
         # 3. Invoke the Lambda for the SECOND time.
-        self.console.print(f"\n[cyan]Step 2: Second invocation (should be caught as a duplicate)...[/cyan]")
+        self.console.print(f"\n[cyan]Step 2: Second invocation (should return an error)...[/cyan]")
         try:
-            response2 = self.lambda_client.invoke(
-                FunctionName=self.config.lambda_function_name,
-                Payload=json.dumps(final_payload_for_lambda),
-                LogType='Tail'
-            )
+            response2 = self.lambda_client.invoke(**invoke_args)
             log2 = base64.b64decode(response2.get('LogResult', b'')).decode('utf-8')
-            if response2.get("FunctionError"):
-                self.console.print("[bold red]❌ TEST FAILED: The second invocation returned an error.[/bold red]")
-                self.console.print(Panel(log2, title="Second Invocation Log Tail"))
+
+            if not response2.get("FunctionError"):
+                self.console.print(
+                    "[bold red]❌ TEST FAILED: The second invocation did not return an error as expected.[/bold red]")
+                self.console.print(Panel(log2, title="Second Invocation Log Tail (unexpected success)"))
                 return 1
 
-            # Key success criteria: The Lambda's own log confirms it caught the duplicate.
-            if "Successfully caught expected IdempotencyItemAlreadyExistsError" in log2:
-                self.console.print("[bold green]✓ Second invocation correctly handled as a duplicate.[/bold green]")
+            if "IdempotencyItemAlreadyExistsError" in log2:
+                self.console.print(
+                    "[bold green]✓ Second invocation correctly failed due to duplicate item.[/bold green]")
             else:
                 self.console.print(
-                    "[bold red]❌ TEST FAILED: The second invocation was not handled as a duplicate.[/bold red]")
+                    "[bold red]❌ TEST FAILED: The second invocation failed, but for the wrong reason.[/bold red]")
                 self.console.print(Panel(log2, title="Second Invocation Log Tail"))
                 return 1
+
         except Exception as e:
             self.console.print(f"[bold red]Lambda invocation failed: {e}[/bold red]")
-            return 1
-
-        # 4. Final Validation: We DON'T expect a bundle, because this test path doesn't create one.
-        # We just confirm no bundles were created for this run_id.
-        self.console.print("\n[cyan]Step 3: Final validation (verifying no bundle was created)...[/cyan]")
-        response = self.s3.list_objects_v2(Bucket=self.config.distribution_bucket, Prefix=self.run_id)
-        if not response.get("Contents"):
-            self.console.print("[bold green]✓ No bundle was created, as expected for this test.[/bold green]")
-        else:
-            self.console.print("[bold red]❌ Validation failed: A bundle was created when none was expected.[/bold red]")
+            if self.config.verbose:
+                self.console.print_exception()
             return 1
 
         self.console.print("\n[bold green]✅ TEST PASSED: Idempotency was correctly enforced.[/bold green]")

@@ -172,6 +172,24 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
         # We can't report partial failures for direct invokes, so we run and let it fail on error.
         _process_valid_records(records_to_process, record_to_message_id_map, context)
         return {"batchItemFailures": []}
+    elif "e2e_idempotency_check_payload" in event:
+        logger.info("Direct invocation for idempotency check detected.")
+        payload = event["e2e_idempotency_check_payload"]
+        try:
+            # First call - should succeed
+            _process_record_idempotently(data=payload)
+
+            # Second call - should raise an exception
+            _process_record_idempotently(data=payload)
+        except IdempotencyItemAlreadyExistsError:
+            # This is the EXPECTED outcome for the second call.
+            logger.info("Successfully caught expected IdempotencyItemAlreadyExistsError.")
+            metrics.add_metric(name="IdempotencyCheckTestSuccess", unit=MetricUnit.Count, value=1)
+
+        # In either case, for this test, we just return success.
+        # The real validation happens in the tester by checking the logs.
+        return {"batchItemFailures": []}
+
     # --- End test block ---
 
     sqs_records: list[dict] = event.get("Records", [])

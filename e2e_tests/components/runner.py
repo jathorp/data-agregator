@@ -496,6 +496,8 @@ class E2ETestRunner:
 
             if self.config.test_type == "direct_invoke":
                 return self._run_direct_invoke_test()
+            elif self.config.test_type == "idempotency_check":
+                return self._run_idempotency_test()
 
             self.manifest = self._produce_and_upload()
             self.console.print(
@@ -658,3 +660,97 @@ class E2ETestRunner:
                 "[bold red]❌ TEST FAILED: The expected 'disk usage exceeds limit' log message was not found.[/bold red]"
             )
             return 1
+
+    def _run_idempotency_test(self) -> int:
+        """
+        Tests the idempotency system by invoking the Lambda twice with the same payload.
+        Verifies that the second invocation is correctly identified as a duplicate.
+        """
+        self.console.print("\n--- [bold blue]Idempotency Check Test[/bold blue] ---")
+
+        if not self.config.lambda_function_name:
+            self.console.print("[bold red]Configuration Error: 'lambda_function_name' is required.[/bold red]")
+            return 2
+
+        # 1. Produce a single source file to get its metadata.
+        self._produce_and_upload()
+        self.console.print("[green]✓ Source file created.[/green]")
+
+        source_file = self.manifest["source_files"][0]
+        bucket_name = self.config.landing_bucket
+
+        # This payload mimics what the SQS loop would normally build for the decorator.
+        # Your idempotency key is based on bucket/key#versionId.
+        idempotency_key = f"{bucket_name}/{source_file['key']}#test-version-id"
+        s3_object_payload = {
+            "key": source_file["key"],
+            "size": source_file["size"],
+            "versionId": "test-version-id"  # Must provide a stable version for the key
+        }
+        test_payload = {
+            "idempotency_key": idempotency_key,
+            "s3_object": s3_object_payload
+        }
+
+        # This is the final payload that the handler will receive.
+        final_payload_for_lambda = {
+            "e2e_idempotency_check_payload": test_payload
+        }
+
+        # 2. Invoke the Lambda for the FIRST time.
+        self.console.print(f"\n[cyan]Step 1: First invocation (should be processed as new)...[/cyan]")
+        try:
+            response1 = self.lambda_client.invoke(
+                FunctionName=self.config.lambda_function_name,
+                Payload=json.dumps(final_payload_for_lambda),
+                LogType='Tail'
+            )
+            log1 = base64.b64decode(response1.get('LogResult', b'')).decode('utf-8')
+            if response1.get("FunctionError") or "Idempotency check passed" not in log1:
+                self.console.print(
+                    "[bold red]❌ TEST FAILED: The first invocation failed or was not processed as new.[/bold red]")
+                self.console.print(Panel(log1, title="First Invocation Log Tail"))
+                return 1
+            self.console.print("[green]✓ First invocation successful.[/green]")
+        except Exception as e:
+            self.console.print(f"[bold red]Lambda invocation failed: {e}[/bold red]")
+            return 1
+
+        # 3. Invoke the Lambda for the SECOND time.
+        self.console.print(f"\n[cyan]Step 2: Second invocation (should be caught as a duplicate)...[/cyan]")
+        try:
+            response2 = self.lambda_client.invoke(
+                FunctionName=self.config.lambda_function_name,
+                Payload=json.dumps(final_payload_for_lambda),
+                LogType='Tail'
+            )
+            log2 = base64.b64decode(response2.get('LogResult', b'')).decode('utf-8')
+            if response2.get("FunctionError"):
+                self.console.print("[bold red]❌ TEST FAILED: The second invocation returned an error.[/bold red]")
+                self.console.print(Panel(log2, title="Second Invocation Log Tail"))
+                return 1
+
+            # Key success criteria: The Lambda's own log confirms it caught the duplicate.
+            if "Successfully caught expected IdempotencyItemAlreadyExistsError" in log2:
+                self.console.print("[bold green]✓ Second invocation correctly handled as a duplicate.[/bold green]")
+            else:
+                self.console.print(
+                    "[bold red]❌ TEST FAILED: The second invocation was not handled as a duplicate.[/bold red]")
+                self.console.print(Panel(log2, title="Second Invocation Log Tail"))
+                return 1
+        except Exception as e:
+            self.console.print(f"[bold red]Lambda invocation failed: {e}[/bold red]")
+            return 1
+
+        # 4. Final Validation: We DON'T expect a bundle, because this test path doesn't create one.
+        # We just confirm no bundles were created for this run_id.
+        self.console.print("\n[cyan]Step 3: Final validation (verifying no bundle was created)...[/cyan]")
+        response = self.s3.list_objects_v2(Bucket=self.config.distribution_bucket, Prefix=self.run_id)
+        if not response.get("Contents"):
+            self.console.print("[bold green]✓ No bundle was created, as expected for this test.[/bold green]")
+        else:
+            self.console.print("[bold red]❌ Validation failed: A bundle was created when none was expected.[/bold red]")
+            return 1
+
+        self.console.print("\n[bold green]✅ TEST PASSED: Idempotency was correctly enforced.[/bold green]")
+        return 0

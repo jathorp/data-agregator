@@ -13,7 +13,7 @@ class Config:
     landing_bucket: str
     distribution_bucket: str
     description: str = "E2E Test Run"
-    generator_type: str = "random"  # <-- NEW: 'random' or 'compressible'
+    generator_type: str = "random"  # 'random' or 'compressible'
     num_files: int = 10
     size_mb: int = 1
     concurrency: int = 8

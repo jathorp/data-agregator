@@ -109,15 +109,20 @@ resource "aws_security_group" "aggregator_lambda_sg" {
 # -----------------------------------------------------------------------------
 
 resource "aws_lambda_function" "aggregator" {
-  function_name = var.lambda_function_name
-  role          = data.terraform_remote_state.stateful.outputs.lambda_iam_role_arn
-  handler       = "data_aggregator.app.handler"
-  runtime       = var.lambda_runtime
-  architectures = ["arm64"]
-  timeout       = var.lambda_timeout
-  memory_size   = var.lambda_memory_size
-  s3_bucket     = var.lambda_artifacts_bucket_name
-  s3_key        = var.lambda_s3_key
+  function_name                  = var.lambda_function_name
+  role                           = data.terraform_remote_state.stateful.outputs.lambda_iam_role_arn
+  handler                        = "data_aggregator.app.handler"
+  runtime                        = var.lambda_runtime
+
+  # The primary goal of this aggregator is to maximize compression efficiency and
+  # minimize the number of output files. Limiting concurrency to 1 ensures that
+  # the Lambda collects the largest possible batch from SQS before creating a bundle.
+  reserved_concurrent_executions = 1
+  architectures                  = ["arm64"]
+  timeout                        = var.lambda_timeout
+  memory_size                    = var.lambda_memory_size
+  s3_bucket                      = var.lambda_artifacts_bucket_name
+  s3_key                         = var.lambda_s3_key
 
   ephemeral_storage {
     size = var.lambda_ephemeral_storage_size

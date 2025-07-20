@@ -1,0 +1,12 @@
+{
+  "description": "Tests the idempotency logic by directly invoking the Lambda with the same payload twice. Expects the second invocation to be a no-op.",
+  "test_type": "idempotency_check",
+  "lambda_function_name": "data-aggregator-processor-dev",
+  "landing_bucket": "data-aggregator-landing-dev",
+  "distribution_bucket": "data-aggregator-distribution-dev",
+  "num_files": 1,
+  "size_mb": 1,
+  "concurrency": 1,
+  "report_file": "results_07_idempotency.xml",
+  "verbose": false
+}

@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import List, Optional, Set, TypedDict, Any
 
 import boto3
-import botocore
 from botocore.client import Config as BotocoreConfig
 from rich.console import Console
 from rich.panel import Panel
@@ -77,9 +76,7 @@ class E2ETestRunner:
         # The Lambda function itself can run for up to 15 minutes (900s), so we
         # need a client-side timeout that is slightly longer.
         self.lambda_client_config = BotocoreConfig(
-            read_timeout=900,
-            connect_timeout=10,
-            retries={'max_attempts': 2}
+            read_timeout=900, connect_timeout=10, retries={"max_attempts": 2}
         )
 
         # We only need this special config for the Lambda client. The S3 client is fine.
@@ -92,7 +89,7 @@ class E2ETestRunner:
         self.run_id = f"e2e-test-{uuid.uuid4().hex[:8]}"
 
         # Set the S3 prefix based on the test type to isolate test data.
-        if self.config.test_type == 'direct_invoke':
+        if self.config.test_type == "direct_invoke":
             # For direct invoke tests, use a prefix that SQS is NOT listening to.
             # This prevents a race condition with an SQS-triggered Lambda.
             base_prefix = "direct-invoke-tests"
@@ -408,7 +405,9 @@ class E2ETestRunner:
 
         # 1. Clean up source files from landing bucket
         if self.manifest and self.manifest.get("source_files"):
-            keys_to_delete = [{"Key": obj["key"]} for obj in self.manifest["source_files"]]
+            keys_to_delete = [
+                {"Key": obj["key"]} for obj in self.manifest["source_files"]
+            ]
             for i in range(0, len(keys_to_delete), 1000):
                 chunk = keys_to_delete[i : i + 1000]
                 self.s3.delete_objects(
@@ -443,7 +442,7 @@ class E2ETestRunner:
         """Deletes old test bundles from the distribution bucket to ensure a clean state."""
         self.console.print("\n--- [bold yellow]Pre-Test Cleanup[/bold yellow] ---")
         try:
-            paginator = self.s3.get_paginator('list_objects_v2')
+            paginator = self.s3.get_paginator("list_objects_v2")
             pages = paginator.paginate(Bucket=self.config.distribution_bucket)
 
             stale_objects = []
@@ -452,66 +451,33 @@ class E2ETestRunner:
             for page in pages:
                 for obj in page.get("Contents", []):
                     # Check if it looks like a bundle and is older than the threshold
-                    if "bundle-" in obj["Key"] and (now - obj["LastModified"]).total_seconds() > older_than_seconds:
+                    if (
+                        "bundle-" in obj["Key"]
+                        and (now - obj["LastModified"]).total_seconds()
+                        > older_than_seconds
+                    ):
                         stale_objects.append({"Key": obj["Key"]})
 
             if not stale_objects:
-                self.console.log("No stale bundles found in distribution bucket. Environment is clean.")
+                self.console.log(
+                    "No stale bundles found in distribution bucket. Environment is clean."
+                )
                 return
 
             self.console.log(f"Found {len(stale_objects)} stale bundle(s) to delete...")
             # S3 delete_objects has a limit of 1000 keys per request
             for i in range(0, len(stale_objects), 1000):
-                chunk = stale_objects[i:i + 1000]
+                chunk = stale_objects[i : i + 1000]
                 self.s3.delete_objects(
-                    Bucket=self.config.distribution_bucket,
-                    Delete={"Objects": chunk}
+                    Bucket=self.config.distribution_bucket, Delete={"Objects": chunk}
                 )
             self.console.log("[green]✓ Stale bundles cleaned up successfully.[/green]")
 
         except Exception as e:
-            self.console.log(f"[bold red]Could not perform pre-test cleanup: {e}[/bold red]")
+            self.console.log(
+                f"[bold red]Could not perform pre-test cleanup: {e}[/bold red]"
+            )
             # We don't fail the test here, just log a warning.
-
-    def _verify_aws_connectivity(self):
-        """
-        Performs pre-flight checks to ensure AWS credentials are set and buckets are accessible.
-        Raises specific, user-friendly exceptions on failure.
-        """
-        self.console.print("\n--- [bold blue]Pre-flight Checks[/bold blue] ---")
-        try:
-            self.s3.head_bucket(Bucket=self.config.landing_bucket)
-            self.console.log(
-                f"[green]✓[/green] Access confirmed for landing bucket: '{self.config.landing_bucket}'"
-            )
-
-            self.s3.head_bucket(Bucket=self.config.distribution_bucket)
-            self.console.log(
-                f"[green]✓[/green] Access confirmed for distribution bucket: '{self.config.distribution_bucket}'"
-            )
-
-        except botocore.exceptions.NoCredentialsError:
-            raise RuntimeError(
-                "AWS credentials not found. Please configure them using one of the following methods:\n"
-                "  1. Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)\n"
-                "  2. A shared credentials file (~/.aws/credentials)\n"
-                "  3. An IAM role attached to the EC2 instance or ECS task."
-            ) from None
-
-        except botocore.exceptions.ClientError as e:
-            if e.response["Error"]["Code"] == "404":
-                raise RuntimeError(
-                    f"A specified S3 bucket does not exist: {e.response['Error']['BucketName']}. "
-                    "Please check your configuration."
-                ) from None  # <--- AND HERE
-            if e.response["Error"]["Code"] == "403":
-                raise RuntimeError(
-                    f"Access denied to S3 bucket: {e.response['Error']['BucketName']}. "
-                    "Please check IAM permissions."
-                ) from None  # <--- AND HERE
-            raise RuntimeError(
-                f"An AWS client error occurred: {e}"
-            ) from None  # <--- AND HERE for the catch-all
 
     def run(self) -> int:
         """Executes the full test lifecycle."""
@@ -526,8 +492,7 @@ class E2ETestRunner:
                 )
             )
 
-            self._verify_aws_connectivity()  # Call the new pre-flight check method
-            self._cleanup_stale_bundles() # Try and revove any old test files
+            self._cleanup_stale_bundles()  # Try and revove any old test files
 
             if self.config.test_type == "direct_invoke":
                 return self._run_direct_invoke_test()
@@ -591,7 +556,7 @@ class E2ETestRunner:
             self.console.print(
                 "[bold red]Configuration Error: 'lambda_function_name' must be set for a 'direct_invoke' test.[/bold red]"
             )
-            return 2 # Setup failure code
+            return 2  # Setup failure code
 
         # 1. Produce files as normal
         manifest = self._produce_and_upload()
@@ -604,26 +569,27 @@ class E2ETestRunner:
             # This mimics the structure of a real S3 event notification.
             record = {
                 "s3": {
-                    "bucket": {"name": bucket_name, "arn": f"arn:aws:s3:::{bucket_name}"},
-                    "object": {"key": source_file["key"], "size": source_file["size"]}
+                    "bucket": {
+                        "name": bucket_name,
+                        "arn": f"arn:aws:s3:::{bucket_name}",
+                    },
+                    "object": {"key": source_file["key"], "size": source_file["size"]},
                 }
             }
             lambda_payload_records.append(record)
 
-        payload = {
-            "e2e_test_direct_invoke": True,
-            "records": lambda_payload_records
-        }
+        payload = {"e2e_test_direct_invoke": True, "records": lambda_payload_records}
 
         # 3. Invoke the Lambda function directly.
         self.console.print(
-            f"Directly invoking Lambda '{self.config.lambda_function_name}' with {len(payload['records'])} records.")
+            f"Directly invoking Lambda '{self.config.lambda_function_name}' with {len(payload['records'])} records."
+        )
 
         try:
             response = self.lambda_client.invoke(
-                FunctionName=self.config.lambda_function_name, # <-- CORRECTED
-                InvocationType='RequestResponse',
-                LogType='Tail',
+                FunctionName=self.config.lambda_function_name,  # <-- CORRECTED
+                InvocationType="RequestResponse",
+                LogType="Tail",
                 Payload=json.dumps(payload),
             )
         except Exception as e:
@@ -631,19 +597,22 @@ class E2ETestRunner:
             return 1
 
         # 4. Analyze the response and logs.
-        log_result = base64.b64decode(response.get('LogResult', b'')).decode('utf-8')
+        log_result = base64.b64decode(response.get("LogResult", b"")).decode("utf-8")
 
         self.console.print("\n--- [bold yellow]Lambda Log Tail[/bold yellow] ---")
         self.console.print(Panel(log_result, border_style="yellow"))
 
         if response.get("FunctionError"):
-            self.console.print("[bold red]❌ TEST FAILED: Lambda function returned an error.[/bold red]")
+            self.console.print(
+                "[bold red]❌ TEST FAILED: Lambda function returned an error.[/bold red]"
+            )
             return 1
 
         # 5. Check for the expected log message
         if "Predicted disk usage exceeds limit" in log_result:
             self.console.print(
-                "\n[bold green]✅ TEST PASSED: Lambda correctly detected the disk limit and stopped processing.[/bold green]")
+                "\n[bold green]✅ TEST PASSED: Lambda correctly detected the disk limit and stopped processing.[/bold green]"
+            )
 
             # Dynamically calculate how many files we EXPECT to have been processed.
             MAX_BUNDLE_ON_DISK_BYTES = 400 * 1024 * 1024
@@ -660,11 +629,12 @@ class E2ETestRunner:
                 "run_id": manifest["run_id"],
                 "start_time": manifest["start_time"],
                 "config": manifest["config"],
-                "source_files": manifest["source_files"][:max_files_in_bundle]
+                "source_files": manifest["source_files"][:max_files_in_bundle],
             }
 
             self.console.print(
-                f"\nProceeding to validate the partial bundle. Expecting {len(expected_manifest['source_files'])} files.")
+                f"\nProceeding to validate the partial bundle. Expecting {len(expected_manifest['source_files'])} files."
+            )
 
             # Now, run the consumer and validator against this *expected partial manifest*.
             self._consume_and_download(expected_manifest)
@@ -672,14 +642,19 @@ class E2ETestRunner:
             self._display_and_report(results)
 
             # The test PASSES if all expected files passed validation.
-            if all(r['status'] == 'PASS' for r in results):
-                self.console.print("[bold green]✅ Validation confirms the partial bundle is correct.[/bold green]")
+            if all(r["status"] == "PASS" for r in results):
+                self.console.print(
+                    "[bold green]✅ Validation confirms the partial bundle is correct.[/bold green]"
+                )
                 return 0
             else:
-                self.console.print("[bold red]❌ Validation of the partial bundle failed.[/bold red]")
+                self.console.print(
+                    "[bold red]❌ Validation of the partial bundle failed.[/bold red]"
+                )
                 return 1
 
         else:
             self.console.print(
-                "[bold red]❌ TEST FAILED: The expected 'disk usage exceeds limit' log message was not found.[/bold red]")
+                "[bold red]❌ TEST FAILED: The expected 'disk usage exceeds limit' log message was not found.[/bold red]"
+            )
             return 1

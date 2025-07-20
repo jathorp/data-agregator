@@ -192,17 +192,20 @@ class E2ETestRunner:
             )
 
             while time.time() < end_time:
-                # Check for completion first
-                extracted_files = {f"{self.s3_prefix}/{p.name}" for p in self.extracted_dir.glob("*") if p.is_file()}
-                if expected_keys.issubset(extracted_files):
-                    progress.update(timeout_task, completed=self.config.timeout_seconds,
-                                    description="[green]All expected files found!")
-                    return
+                extracted_keys = {
+                    str(p.relative_to(self.extracted_dir))
+                    for p in self.extracted_dir.rglob("*")
+                    if p.is_file()
+                }
+                if expected_keys.issubset(extracted_keys):
+                    progress.update(timeout_task, completed=self.config.timeout_seconds, description="[green]All expected files found!")
+                    return # This will now work and exit the loop immediately.
 
-                # --- THIS IS THE KEY CHANGE ---
-                # Remove the restrictive prefix to search the entire bucket.
-                # We will filter for bundle files in the code below.
                 response = self.s3.list_objects_v2(Bucket=self.config.distribution_bucket)
+                new_bundles = [
+                    obj for obj in response.get("Contents", [])
+                    if "bundle-" in obj["Key"] and obj["Key"] not in self.processed_bundle_keys
+                ]
 
                 # Filter for new bundles based on the filename pattern
                 new_bundles = [

@@ -679,22 +679,20 @@ class E2ETestRunner:
         source_file = self.manifest["source_files"][0]
         bucket_name = self.config.landing_bucket
 
-        # This payload mimics what the SQS loop would normally build for the decorator.
-        # Your idempotency key is based on bucket/key#versionId.
+        # This is the final payload that the handler will receive.
+        # It's structured to be easily identified by the handler
+        # and contains the data needed by the idempotency decorator.
         idempotency_key = f"{bucket_name}/{source_file['key']}#test-version-id"
         s3_object_payload = {
             "key": source_file["key"],
             "size": source_file["size"],
-            "versionId": "test-version-id"  # Must provide a stable version for the key
+            "versionId": "test-version-id"
         }
-        test_payload = {
-            "idempotency_key": idempotency_key,
-            "s3_object": s3_object_payload
-        }
-
-        # This is the final payload that the handler will receive.
         final_payload_for_lambda = {
-            "e2e_idempotency_check_payload": test_payload
+            "e2e_idempotency_check_payload": {
+                "idempotency_key": idempotency_key,
+                "s3_object": s3_object_payload
+            }
         }
 
         # 2. Invoke the Lambda for the FIRST time.

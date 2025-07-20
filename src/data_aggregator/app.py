@@ -158,120 +158,117 @@ def _process_valid_records(
 @tracer.capture_lambda_handler
 @metrics.log_metrics(capture_cold_start_metric=True)
 def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
-    """Main Lambda handler to process a batch of S3 events from SQS."""
+    """Main Lambda handler for SQS events and direct test invocations."""
     metrics.add_dimension("environment", CONFIG.environment)
     idempotency_config.register_lambda_context(context)
 
-    # --- Handle direct invocation for testing ---
-    if event.get("e2e_test_direct_invoke"):
-        logger.warning("Direct invocation test detected, bypassing SQS parsing.")
-        # We can skip idempotency for this controlled test, as we are creating the batch.
-        records_to_process = event.get("records", [])
-        # We don't have SQS message IDs, so this map is empty.
-        record_to_message_id_map = {}
-        # We can't report partial failures for direct invokes, so we run and let it fail on error.
-        _process_valid_records(records_to_process, record_to_message_id_map, context)
-        return {"batchItemFailures": []}
-    elif "e2e_idempotency_check_payload" in event:
+    # --- START OF TEST ROUTING LOGIC ---
+
+    # Path 1: Direct invocation for the idempotency check test.
+    if "e2e_idempotency_check_payload" in event:
         logger.info("Direct invocation for idempotency check detected.")
-        payload = event["e2e_idempotency_check_payload"]
+        payload_for_decorator = event["e2e_idempotency_check_payload"]
         try:
             # First call - should succeed
-            _process_record_idempotently(data=payload)
-
-            # Second call - should raise an exception
-            _process_record_idempotently(data=payload)
+            _process_record_idempotently(data=payload_for_decorator)
+            # Second call - should raise the exception
+            _process_record_idempotently(data=payload_for_decorator)
         except IdempotencyItemAlreadyExistsError:
             # This is the EXPECTED outcome for the second call.
             logger.info("Successfully caught expected IdempotencyItemAlreadyExistsError.")
             metrics.add_metric(name="IdempotencyCheckTestSuccess", unit=MetricUnit.Count, value=1)
 
-        # In either case, for this test, we just return success.
-        # The real validation happens in the tester by checking the logs.
         return {"batchItemFailures": []}
 
-    # --- End test block ---
-
-    sqs_records: list[dict] = event.get("Records", [])
-    if not sqs_records:
-        logger.warning("Event did not contain any SQS records. Exiting gracefully.")
+    # Path 2: Direct invocation for the bundling (e.g., disk limit) test.
+    elif event.get("e2e_test_direct_invoke"):
+        logger.info("Direct invocation test for bundling detected.")
+        records_to_process = event.get("records", [])
+        _process_valid_records(records_to_process, {}, context)
         return {"batchItemFailures": []}
 
-    # --- Setup tracking variables ---
-    records_to_process: List[S3EventRecord] = []
-    failed_message_ids: Set[str] = set()
-    record_to_message_id_map: dict[str, set[str]] = {}
+    # --- Path 3: Default path for real SQS messages ---
+    else:
+        sqs_records: list[dict] = event.get("Records", [])
+        if not sqs_records:
+            logger.warning("Event did not contain any SQS records. Exiting gracefully.")
+            return {"batchItemFailures": []}
 
-    # --- 1. First Pass: Parse, build lookup map, and run idempotency checks ---
-    for sqs_record in sqs_records:
-        message_id = sqs_record["messageId"]
-        try:
-            s3_event = json.loads(sqs_record["body"])
-            s3_records = s3_event.get("Records")
-            if not s3_records:
-                raise KeyError("'Records' list is missing or empty.")
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(
-                "Failed to parse SQS message body.",
-                extra={"messageId": message_id, "error": str(e)},
-            )
-            failed_message_ids.add(message_id)
-            continue
+        # --- Setup tracking variables ---
+        records_to_process: List[S3EventRecord] = []
+        failed_message_ids: Set[str] = set()
+        record_to_message_id_map: dict[str, set[str]] = {}
 
-        for s3_record in s3_records:
-            idempotency_key = ""
+        # --- 1. First Pass: Parse, build lookup map, and run idempotency checks ---
+        for sqs_record in sqs_records:
+            message_id = sqs_record["messageId"]
             try:
-                s3_object = s3_record["s3"]["object"]
-                s3_key = s3_object["key"]
-                s3_version = s3_object.get("versionId")
-                unique_record_key = f"{s3_key}#{s3_version}" if s3_version else s3_key
-
-                record_to_message_id_map.setdefault(unique_record_key, set()).add(
-                    message_id
-                )
-
-                idempotency_key = (
-                    f"{s3_record['s3']['bucket']['name']}/{unique_record_key}"
-                )
-                payload = {"idempotency_key": idempotency_key, "s3_object": s3_object}
-                _process_record_idempotently(data=payload)
-
-                records_to_process.append(s3_record)
-
-            except IdempotencyItemAlreadyExistsError:
-                metrics.add_metric(
-                    name="FailedIdempotencyChecks", unit=MetricUnit.Count, value=1
-                )
-                logger.info(
-                    "Skipping duplicate S3 object.",
-                    extra={"idempotency_key": idempotency_key},
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to process an S3 record.", extra={"messageId": message_id}
+                s3_event = json.loads(sqs_record["body"])
+                s3_records = s3_event.get("Records")
+                if not s3_records:
+                    raise KeyError("'Records' list is missing or empty.")
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning(
+                    "Failed to parse SQS message body.",
+                    extra={"messageId": message_id, "error": str(e)},
                 )
                 failed_message_ids.add(message_id)
+                continue
 
-    # --- 2. If no new valid records, exit now ---
-    if not records_to_process:
-        logger.info("No new records to process after filtering duplicates and errors.")
-        return build_partial_failure_response(failed_message_ids)
+            for s3_record in s3_records:
+                idempotency_key = ""
+                try:
+                    s3_object = s3_record["s3"]["object"]
+                    s3_key = s3_object["key"]
+                    s3_version = s3_object.get("versionId")
+                    unique_record_key = f"{s3_key}#{s3_version}" if s3_version else s3_key
 
-    # --- 3. Process the valid batch ---
-    try:
-        unprocessed_ids = _process_valid_records(
-            records_to_process, record_to_message_id_map, context
-        )
-        failed_message_ids.update(unprocessed_ids)
-    except Exception:
-        logger.exception("A non-recoverable error occurred during bundling.")
-        all_contributing_message_ids = _get_message_ids_for_s3_records(
-            records_to_process, record_to_message_id_map
-        )
-        return build_partial_failure_response(all_contributing_message_ids)
+                    record_to_message_id_map.setdefault(unique_record_key, set()).add(
+                        message_id
+                    )
 
-    # --- 4. Return the final result ---
-    if failed_message_ids:
-        return build_partial_failure_response(failed_message_ids)
+                    idempotency_key = (
+                        f"{s3_record['s3']['bucket']['name']}/{unique_record_key}"
+                    )
+                    payload = {"idempotency_key": idempotency_key, "s3_object": s3_object}
+                    _process_record_idempotently(data=payload)
 
-    return {"batchItemFailures": []}
+                    records_to_process.append(s3_record)
+
+                except IdempotencyItemAlreadyExistsError:
+                    metrics.add_metric(
+                        name="FailedIdempotencyChecks", unit=MetricUnit.Count, value=1
+                    )
+                    logger.info(
+                        "Skipping duplicate S3 object.",
+                        extra={"idempotency_key": idempotency_key},
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to process an S3 record.", extra={"messageId": message_id}
+                    )
+                    failed_message_ids.add(message_id)
+
+        # --- 2. If no new valid records, exit now ---
+        if not records_to_process:
+            logger.info("No new records to process after filtering duplicates and errors.")
+            return build_partial_failure_response(failed_message_ids)
+
+        # --- 3. Process the valid batch ---
+        try:
+            unprocessed_ids = _process_valid_records(
+                records_to_process, record_to_message_id_map, context
+            )
+            failed_message_ids.update(unprocessed_ids)
+        except Exception:
+            logger.exception("A non-recoverable error occurred during bundling.")
+            all_contributing_message_ids = _get_message_ids_for_s3_records(
+                records_to_process, record_to_message_id_map
+            )
+            return build_partial_failure_response(all_contributing_message_ids)
+
+        # --- 4. Return the final result ---
+        if failed_message_ids:
+            return build_partial_failure_response(failed_message_ids)
+
+        return {"batchItemFailures": []}

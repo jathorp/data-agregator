@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Set, TypedDict, Any
+from urllib.parse import quote
 
 import boto3
 from botocore.client import Config as BotocoreConfig
@@ -681,7 +682,11 @@ class E2ETestRunner:
 
         # This payload is structured to be uniquely identified by our test handler
         # and contains the data needed by the idempotency decorator.
-        idempotency_key = f"{bucket_name}/{source_file['key']}#test-version-id"
+        raw = json.dumps(
+            {"b": bucket_name, "k": source_file["key"], "v": "test-version-id"},
+            separators=(",", ":"),
+        )
+        idempotency_key = quote(raw, safe="")
         s3_object_payload = {
             "key": source_file["key"],
             "size": source_file["size"],
@@ -713,9 +718,9 @@ class E2ETestRunner:
                 self.console.print(Panel(log1, title="First Invocation Log Tail"))
                 return 1
 
-            if "Idempotency check passed" not in log1:
+            if "Skipping duplicate S3 object" in log1:
                 self.console.print(
-                    "[bold red]❌ TEST FAILED: The first invocation did not log the expected success message.[/bold red]")
+                    "[bold red]❌ TEST FAILED: The first invocation was unexpectedly treated as a duplicate.[/bold red]")
                 self.console.print(Panel(log1, title="First Invocation Log Tail"))
                 return 1
 

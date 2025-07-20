@@ -132,6 +132,8 @@ def create_tar_gz_bundle_stream(
     processed_records: List[S3EventRecord] = []
     bytes_written = 0
 
+    logger.warning(f"Starting a TEST. Info should be debugging.")
+
     try:
         with tarfile.open(
                 mode="w:gz",

@@ -202,10 +202,6 @@ class E2ETestRunner:
                     return # This will now work and exit the loop immediately.
 
                 response = self.s3.list_objects_v2(Bucket=self.config.distribution_bucket)
-                new_bundles = [
-                    obj for obj in response.get("Contents", [])
-                    if "bundle-" in obj["Key"] and obj["Key"] not in self.processed_bundle_keys
-                ]
 
                 # Filter for new bundles based on the filename pattern
                 new_bundles = [

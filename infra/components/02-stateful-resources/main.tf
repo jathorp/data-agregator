@@ -317,7 +317,7 @@ resource "aws_sqs_queue" "dlq" {
 resource "aws_sqs_queue" "main" {
   name                       = var.main_queue_name
   message_retention_seconds  = 345600
-  visibility_timeout_seconds = 90
+  visibility_timeout_seconds = 650
   sqs_managed_sse_enabled    = true
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.dlq.arn,

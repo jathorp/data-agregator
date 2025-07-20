@@ -140,13 +140,14 @@ def create_tar_gz_bundle_stream(
                 fileobj=cast(BinaryIO, hashing_writer),
                 format=tarfile.PAX_FORMAT,
         ) as tar:
-            logger.info(f"Starting to process a batch of {len(records)} records.")
+            logger.warning(f"Starting to process a batch of {len(records)} records.")
 
             for i, record in enumerate(records):
                 # --- START OF THE TRY BLOCK FOR A SINGLE RECORD ---
+                logger.warning(f"Starting to process a record {i}.")
                 try:
                     remaining_time_ms = context.get_remaining_time_in_millis()
-                    logger.info(
+                    logger.warning(
                         f"Record {i+1}/{len(records)}: "
                         f"Remaining time is {remaining_time_ms}ms. "
                         f"Threshold is {TIMEOUT_GUARD_THRESHOLD_MS}ms."
@@ -158,7 +159,7 @@ def create_tar_gz_bundle_stream(
                         break
 
                     metadata_size = record["s3"]["object"]["size"]
-                    logger.info(
+                    logger.warning(
                         f"Record {i+1}: "
                         f"Current bundle size is {bytes_written} bytes. "
                         f"Next file size is {metadata_size} bytes. "

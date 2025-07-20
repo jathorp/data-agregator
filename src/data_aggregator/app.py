@@ -1,5 +1,3 @@
-# src/data_aggregator/app.py
-
 """
 The Lambda Adapter & Orchestrator for the Data Aggregator service.
 
@@ -18,7 +16,8 @@ responsible for:
 
 import json
 from datetime import datetime, timezone
-from typing import Any, List, Set, cast
+from typing import Any, cast
+from urllib.parse import quote
 
 import boto3
 from aws_lambda_powertools import Logger, Metrics, Tracer
@@ -73,6 +72,19 @@ idempotency_config = IdempotencyConfig(
 # Set the primary key name for the persistence layer that the idempotency utility will use.
 idempotency_persistence_layer.configure(config=idempotency_config)
 
+# ───────────────────────────────────────────────────────────────
+# Helper: collision‑proof idempotency key
+# ───────────────────────────────────────────────────────────────
+def _make_idempotency_key(bucket: str, key: str, version: str | None) -> str:
+    """
+    Deterministic, collision‑proof key:
+      1. Compact JSON → {"b":bucket,"k":key,"v":version}
+      2. URL‑encode so it’s pure ASCII and control‑char‑free.
+    """
+    raw = json.dumps({"b": bucket, "k": key, "v": version or ""}, separators=(",", ":"))
+    return quote(raw, safe="")  # always ≤ ~1 KB so Powertools is happy
+
+
 @idempotent_function(
     data_keyword_argument="data",
     config=idempotency_config,
@@ -80,7 +92,6 @@ idempotency_persistence_layer.configure(config=idempotency_config)
 )
 def _process_record_idempotently(*, data: dict[str, Any]) -> bool:
     """Wraps the idempotency check. If it runs, the item is not a duplicate."""
-    # Maybe we should keep this at info - it is needed for the test system?
     logger.debug("Idempotency check passed for new item.", extra=data)
     return True
 
@@ -100,11 +111,11 @@ def build_partial_failure_response(
 
 
 def _get_message_ids_for_s3_records(
-    s3_records: List[S3EventRecord],
+    s3_records: list[S3EventRecord],
     record_to_message_id_map: dict[str, set[str]],
-) -> Set[str]:
+) -> set[str]:
     """Finds all unique SQS message IDs for a given list of S3 records."""
-    message_ids: Set[str] = set()
+    message_ids: set[str] = set()
     for record in s3_records:
         s3_key = record["s3"]["object"]["key"]
         s3_version = record["s3"]["object"].get("versionId")
@@ -115,10 +126,10 @@ def _get_message_ids_for_s3_records(
 
 
 def _process_valid_records(
-    records_to_process: List[S3EventRecord],
+    records_to_process: list[S3EventRecord],
     record_to_message_id_map: dict[str, set[str]],
     context: LambdaContext,
-) -> Set[str]:
+) -> set[str]:
     """Takes valid S3 records, bundles them, and returns SQS message IDs for any unprocessed records."""
     now = datetime.now(timezone.utc)
     bundle_key = f"{now.strftime('%Y/%m/%d/%H')}/bundle-{context.aws_request_id}.tar.gz"
@@ -162,11 +173,15 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
     """Main Lambda handler for SQS events and direct test invocations."""
     metrics.add_dimension("environment", CONFIG.environment)
     idempotency_config.register_lambda_context(context)
+    is_test_env = CONFIG.environment.lower() in {"dev", "test"}
 
     # --- START OF TEST ROUTING LOGIC ---
 
     # Path 1: Direct invocation for the idempotency check test.
     if "e2e_idempotency_check_payload" in event:
+        if not is_test_env:
+            logger.error("Test-only idempotency payload received in production.")
+            raise ValueError("e2e_idempotency_check_payload not allowed in this environment")
         logger.info("Direct invocation for idempotency check detected.")
         payload_for_decorator = event["e2e_idempotency_check_payload"]
 
@@ -184,6 +199,9 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
 
     # Path 2: Direct invocation for the bundling (e.g., disk limit) test.
     elif event.get("e2e_test_direct_invoke"):
+        if not is_test_env:
+            logger.error("Test-only bundling invoke received in production.")
+            raise ValueError("e2e_test_direct_invoke not allowed in this environment")
         logger.info("Direct invocation test for bundling detected.")
         records_to_process = event.get("records", [])
         _process_valid_records(records_to_process, {}, context)
@@ -199,8 +217,8 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
 
 
         # --- Setup tracking variables ---
-        records_to_process: List[S3EventRecord] = []
-        failed_message_ids: Set[str] = set()
+        records_to_process: list[S3EventRecord] = []
+        failed_message_ids: set[str] = set()
         record_to_message_id_map: dict[str, set[str]] = {}
 
         # --- 1. First Pass: Parse, build lookup map, and run idempotency checks ---
@@ -231,8 +249,9 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
                         message_id
                     )
 
-                    idempotency_key = (
-                        f"{s3_record['s3']['bucket']['name']}/{unique_record_key}"
+                    bucket_name = s3_record["s3"]["bucket"]["name"]
+                    idempotency_key = _make_idempotency_key(
+                        bucket_name, s3_key, s3_version
                     )
                     payload = {"idempotency_key": idempotency_key, "s3_object": s3_object}
                     _process_record_idempotently(data=payload)

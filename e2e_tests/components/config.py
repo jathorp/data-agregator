@@ -1,5 +1,3 @@
-# e2e_tests/components/config.py
-
 import argparse
 import json
 from dataclasses import dataclass, field
@@ -14,8 +12,11 @@ class Config:
     distribution_bucket: str
     description: str = "E2E Test Run"
     generator_type: str = "random"  # 'random' or 'compressible'
-    test_type: str = "s3_trigger"  # 's3_trigger', 'direct_invoke', or 'idempotency_check'
+    test_type: str = (
+        "s3_trigger"  # 's3_trigger', 'direct_invoke', or 'idempotency_check'
+    )
     lambda_function_name: Optional[str] = None
+    idempotency_table_name: Optional[str] = None  # Added for idempotency test
     num_files: int = 10
     size_mb: int = 1
     concurrency: int = 8

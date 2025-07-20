@@ -41,6 +41,7 @@ def main():
         print(f"\nAn unexpected error occurred during the test run: {e}")
         if config.verbose:
             import traceback
+
             traceback.print_exc()
         exit(1)
 

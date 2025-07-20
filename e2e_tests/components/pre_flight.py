@@ -85,9 +85,9 @@ def verify_aws_connectivity(config: Config):
         console.print("\n[bold red]❌ PRE-FLIGHT CHECK FAILED[/bold red]\n")
         error_code = e.response["Error"]["Code"]
         if error_code == "404":
-            error_message = f"An S3 bucket specified in your config does not exist. Please verify bucket names."
+            error_message = "An S3 bucket specified in your config does not exist. Please verify bucket names."
         elif error_code == "403":
-            error_message = f"Access Denied when trying to access an AWS resource. Please check your IAM permissions."
+            error_message = "Access Denied when trying to access an AWS resource. Please check your IAM permissions."
         elif error_code == "ResourceNotFoundException":
             error_message = f"Lambda function not found: '{config.lambda_function_name}'. Please check the function name."
         else:

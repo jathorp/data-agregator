@@ -169,17 +169,15 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
         logger.info("Direct invocation for idempotency check detected.")
         payload_for_decorator = event["e2e_idempotency_check_payload"]
 
-        # This handler does NOT call the function twice. The *tester* calls this handler twice.
-        # This handler's only job is to process the record. The decorator will handle raising
-        # the exception on the second call, which is what the tester is looking for.
         try:
             _process_record_idempotently(data=payload_for_decorator)
         except IdempotencyItemAlreadyExistsError:
-            # When the tester calls this handler the *second* time, this block will execute.
-            # We log a specific message so the tester can verify the correct error was caught.
-            logger.info("Idempotency check correctly caught a duplicate item.")
-            # We must re-raise the exception so the Lambda invocation fails, which the tester expects.
-            raise
+            # This is the correct, resilient way to handle this.
+            # We log a message that mirrors the main SQS path.
+            logger.info(
+                "Skipping duplicate S3 object.",
+                extra={"idempotency_key": payload_for_decorator.get("idempotency_key")}
+            )
 
         return {"batchItemFailures": []}
 

@@ -728,25 +728,28 @@ class E2ETestRunner:
             return 1
 
         # 3. Invoke the Lambda for the SECOND time.
-        self.console.print(f"\n[cyan]Step 2: Second invocation (should return an error)...[/cyan]")
+        self.console.print(f"\n[cyan]Step 2: Second invocation (should be a no-op)...[/cyan]")
         try:
             response2 = self.lambda_client.invoke(**invoke_args)
             log2 = base64.b64decode(response2.get('LogResult', b'')).decode('utf-8')
 
-            if not response2.get("FunctionError"):
+            # --- START OF NEW VALIDATION LOGIC FOR SECOND CALL ---
+            # It should SUCCEED (no error)
+            if response2.get("FunctionError"):
                 self.console.print(
-                    "[bold red]❌ TEST FAILED: The second invocation did not return an error as expected.[/bold red]")
-                self.console.print(Panel(log2, title="Second Invocation Log Tail (unexpected success)"))
-                return 1
-
-            if "IdempotencyItemAlreadyExistsError" in log2:
-                self.console.print(
-                    "[bold green]✓ Second invocation correctly failed due to duplicate item.[/bold green]")
-            else:
-                self.console.print(
-                    "[bold red]❌ TEST FAILED: The second invocation failed, but for the wrong reason.[/bold red]")
+                    "[bold red]❌ TEST FAILED: The second invocation unexpectedly returned an error.[/bold red]")
                 self.console.print(Panel(log2, title="Second Invocation Log Tail"))
                 return 1
+
+            # And its log should contain the "Skipping duplicate" message.
+            if "Skipping duplicate S3 object" in log2:
+                self.console.print("[bold green]✓ Second invocation correctly logged the duplicate skip.[/bold green]")
+            else:
+                self.console.print(
+                    "[bold red]❌ TEST FAILED: The second invocation did not log the expected skip message.[/bold red]")
+                self.console.print(Panel(log2, title="Second Invocation Log Tail"))
+                return 1
+            # --- END OF NEW VALIDATION LOGIC ---
 
         except Exception as e:
             self.console.print(f"[bold red]Lambda invocation failed: {e}[/bold red]")

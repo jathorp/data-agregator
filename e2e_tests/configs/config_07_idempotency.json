@@ -1,5 +1,5 @@
 {
-  "description": "Tests the idempotency logic by directly invoking the Lambda with the same payload twice. Expects the second invocation to be a no-op.",
+  "description": "Tests the idempotency logic by directly invoking the Lambda with the same payload twice. Will only work if DEBUG is enabled.",
   "test_type": "idempotency_check",
   "lambda_function_name": "data-aggregator-processor-dev",
   "landing_bucket": "data-aggregator-landing-dev",

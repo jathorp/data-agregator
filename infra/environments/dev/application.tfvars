@@ -14,5 +14,5 @@ lambda_ephemeral_storage_size = 2048
 lambda_artifacts_bucket_name = "verify-artifacts-111-eu-west-2"
 lambda_application_name      = "data-aggregator"
 
-# Set to enable testing - for production INFO
-log_level = "DEBUG"
+# Set to DEBUG to enable testing - or for more production use INFO
+log_level = "INFO"

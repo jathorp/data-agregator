@@ -73,7 +73,19 @@ class E2ETestRunner:
         self.s3 = boto3.client("s3")
         self.console = Console()
         self.run_id = f"e2e-test-{uuid.uuid4().hex[:8]}"
-        self.s3_prefix = self.run_id
+
+        # Set the S3 prefix based on the test type to isolate test data.
+        if self.config.test_type == 'direct_invoke':
+            # For direct invoke tests, use a prefix that SQS is NOT listening to.
+            # This prevents a race condition with an SQS-triggered Lambda.
+            base_prefix = "direct-invoke-tests"
+        else:
+            # For standard SQS-triggered tests, we MUST use the prefix that SQS
+            # is configured to listen to in our Terraform variables (`data/`).
+            base_prefix = "data"
+
+        self.s3_prefix = f"{base_prefix}/{self.run_id}"
+
         self.local_workspace = Path(tempfile.mkdtemp(prefix=f"{self.run_id}-"))
         self.source_dir = self.local_workspace / "source"
         self.extracted_dir = self.local_workspace / "extracted"

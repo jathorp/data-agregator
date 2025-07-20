@@ -733,28 +733,33 @@ class E2ETestRunner:
                 self.console.print_exception()
             return 1
 
-        # 3. Verify the idempotency record was written to DynamoDB using the fully-qualified key.
+        # 3. Verify the idempotency record was written to DynamoDB using the correct key.
         try:
             ddb = boto3.client("dynamodb")
-            # --- NEW: Construct the fully-qualified key that Powertools uses ---
-            hashed_key = hashlib.sha256(idempotency_key.encode()).hexdigest()
+
+            # ---- NEW: Both fixes applied --------------------------------------
+            # 1.  Powertools uses MD5 unless you override it.
+            hashed_key = hashlib.md5(idempotency_key.encode()).hexdigest()
+
+            # 2.  In the Lambda execution environment the import path is
+            #     'data_aggregator.app', not 'src.data_aggregator.app'.
             full_pk = (
                 f"{self.config.lambda_function_name}"
-                f".src.data_aggregator.app._process_record_idempotently"
+                f".data_aggregator.app._process_record_idempotently"
                 f"#{hashed_key}"
             )
-            # --- END NEW ---
+            # -------------------------------------------------------------------
 
             item = ddb.get_item(
                 TableName=self.config.idempotency_table_name,
-                Key={"object_key": {"S": full_pk}},  # Use the full key
+                Key={"object_key": {"S": full_pk}},
                 ConsistentRead=True,
             )
             if "Item" not in item:
                 self.console.print(
                     "[bold red]❌ TEST FAILED: Idempotency record was not written.[/bold red]"
                 )
-                self.console.print(f"   (Looked for key: {full_pk})")  # Added for better debugging
+                self.console.print(f"   (Looked for key: {full_pk})")
                 return 1
             self.console.print("[green]✓ Idempotency record found in DynamoDB.[/green]")
         except Exception as e:
@@ -769,7 +774,6 @@ class E2ETestRunner:
             response2 = self.lambda_client.invoke(**invoke_args)
             log2 = base64.b64decode(response2.get('LogResult', b'')).decode('utf-8')
 
-            # Success criteria: second call returns 200 OK and did NOT run business logic.
             if response2.get("FunctionError"):
                 self.console.print(
                     "[bold red]❌ TEST FAILED: The second invocation returned a FunctionError.[/bold red]"
@@ -777,7 +781,6 @@ class E2ETestRunner:
                 self.console.print(Panel(log2, title="Second Invocation Log Tail"))
                 return 1
 
-            # Optional: emit an info line so you know it was a duplicate
             self.console.print(
                 "[bold green]✓ Second invocation reused cached result (no duplicate processing).[/bold green]")
 

@@ -1,9 +1,7 @@
-#!/usr/bin/env python
+# e2e_tests/components/runner.py
 
-import argparse
 import hashlib
 import json
-import os
 import shutil
 import tarfile
 import tempfile
@@ -11,9 +9,8 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, TypedDict
+from typing import List, Optional, Set, TypedDict, Any
 
 import boto3
 import botocore
@@ -28,9 +25,12 @@ from rich.progress import (
 )
 from rich.table import Table
 
-# --- Constants ---
-MANIFEST_FILENAME = "manifest.json"
-CHUNK_SIZE = 1024 * 1024  # 1 MiB
+from .config import Config
+from .data_generator import (
+    CompressibleTextGenerator,
+    DataGenerator,
+    RandomDataGenerator,
+)
 
 
 # --- Data Structures ---
@@ -45,7 +45,7 @@ class SourceFile(TypedDict):
 class TestManifest(TypedDict):
     run_id: str
     start_time: str
-    config: Dict[str, Any]
+    config: dict[str, Any]
     source_files: List[SourceFile]
 
 
@@ -55,24 +55,14 @@ class ValidationResult(TypedDict):
     details: str
 
 
-@dataclass
-class Config:
-    """Configuration for the E2E test runner."""
+# --- Constants ---
+MANIFEST_FILENAME = "manifest.json"
+CHUNK_SIZE = 1024 * 1024  # 1 MiB
 
-    landing_bucket: str
-    distribution_bucket: str
-    num_files: int = 10
-    size_mb: int = 1
-    concurrency: int = 8
-    keep_files: bool = False
-    timeout_seconds: int = 300
-    report_file: Optional[str] = None
-    raw_config: Dict[str, Any] = field(default_factory=dict, repr=False)
-    verbose: bool = False
-    description: str = "E2E Test Run"
-
-
-# --- Main Test System Class ---
+GENERATOR_MAP = {
+    "random": RandomDataGenerator,
+    "compressible": CompressibleTextGenerator,
+}
 
 
 class E2ETestRunner:
@@ -82,7 +72,6 @@ class E2ETestRunner:
         self.config = config
         self.s3 = boto3.client("s3")
         self.console = Console()
-
         self.run_id = f"e2e-test-{uuid.uuid4().hex[:8]}"
         self.s3_prefix = self.run_id
         self.local_workspace = Path(tempfile.mkdtemp(prefix=f"{self.run_id}-"))
@@ -91,9 +80,13 @@ class E2ETestRunner:
 
         self.source_dir.mkdir()
         self.extracted_dir.mkdir()
-
-        # State tracking
         self.processed_bundle_keys: Set[str] = set()
+
+        # Instantiate the correct data generator based on config
+        generator_class = GENERATOR_MAP.get(self.config.generator_type)
+        if not generator_class:
+            raise ValueError(f"Unknown generator_type: '{self.config.generator_type}'")
+        self.data_generator: DataGenerator = generator_class()
 
     def _hash_file_in_chunks(self, path: Path) -> str:
         """
@@ -106,29 +99,15 @@ class E2ETestRunner:
                 hasher.update(chunk)
         return hasher.hexdigest()
 
-    def _generate_file_and_hash(self, path: Path) -> str:
-        """Creates a local file of a given size and returns its SHA256 hash."""
-        hasher = hashlib.sha256()
-
-        if self.config.size_mb == 0:
-            path.touch() # Create an empty file
-            # The hash of an empty string
-            return "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
-        with open(path, "wb") as f:
-            for _ in range(self.config.size_mb):
-                chunk = os.urandom(CHUNK_SIZE)
-                f.write(chunk)
-                hasher.update(chunk)
-        return hasher.hexdigest()
-
     def _produce_one_file(self, index: int) -> SourceFile:
         """Worker function to generate, hash, and upload a single source file."""
         filename = f"source_file_{index + 1:04d}.bin"
         local_path = self.source_dir / filename
         s3_key = f"{self.s3_prefix}/{filename}"
 
-        file_hash = self._generate_file_and_hash(local_path)
+        # Use the data generator strategy object
+        file_hash = self.data_generator.generate(local_path, self.config.size_mb)
+
         self.s3.upload_file(str(local_path), self.config.landing_bucket, s3_key)
 
         return {
@@ -175,8 +154,6 @@ class E2ETestRunner:
             json.dump(manifest, f, indent=2)
         return manifest
 
-    # This is the updated method within the E2ETestRunner class.
-
     def _consume_and_download(self, manifest: TestManifest):
         """
         Polls the distribution bucket, downloading and extracting bundles.
@@ -187,14 +164,14 @@ class E2ETestRunner:
         end_time = time.time() + self.config.timeout_seconds
 
         with Progress(
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TimeElapsedColumn(),
-                console=self.console
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TimeElapsedColumn(),
+            console=self.console,
         ) as progress:
             timeout_task = progress.add_task(
                 f"[yellow]Polling for bundles (timeout in {self.config.timeout_seconds}s)",
-                total=self.config.timeout_seconds
+                total=self.config.timeout_seconds,
             )
 
             while time.time() < end_time:
@@ -204,15 +181,23 @@ class E2ETestRunner:
                     if p.is_file()
                 }
                 if expected_keys.issubset(extracted_keys):
-                    progress.update(timeout_task, completed=self.config.timeout_seconds, description="[green]All expected files found!")
-                    return # This will now work and exit the loop immediately.
+                    progress.update(
+                        timeout_task,
+                        completed=self.config.timeout_seconds,
+                        description="[green]All expected files found!",
+                    )
+                    return  # This will now work and exit the loop immediately.
 
-                response = self.s3.list_objects_v2(Bucket=self.config.distribution_bucket)
+                response = self.s3.list_objects_v2(
+                    Bucket=self.config.distribution_bucket
+                )
 
                 # Filter for new bundles based on the filename pattern
                 new_bundles = [
-                    obj for obj in response.get("Contents", [])
-                    if "bundle-" in obj["Key"] and obj["Key"] not in self.processed_bundle_keys
+                    obj
+                    for obj in response.get("Contents", [])
+                    if "bundle-" in obj["Key"]
+                    and obj["Key"] not in self.processed_bundle_keys
                 ]
 
                 if not new_bundles:
@@ -227,12 +212,18 @@ class E2ETestRunner:
                     local_bundle_path = self.local_workspace / Path(bundle_key).name
 
                     try:
-                        self.s3.download_file(self.config.distribution_bucket, bundle_key, str(local_bundle_path))
+                        self.s3.download_file(
+                            self.config.distribution_bucket,
+                            bundle_key,
+                            str(local_bundle_path),
+                        )
                         self.processed_bundle_keys.add(bundle_key)
 
                         with tarfile.open(local_bundle_path, "r:gz") as tar:
-                            tar.extractall(path=self.extracted_dir, filter='data')
-                        progress.log(f"  [green]✓[/green] Successfully extracted [magenta]{bundle_key}[/magenta].")
+                            tar.extractall(path=self.extracted_dir, filter="data")
+                        progress.log(
+                            f"  [green]✓[/green] Successfully extracted [magenta]{bundle_key}[/magenta]."
+                        )
 
                     except tarfile.ReadError as e:
                         progress.log(
@@ -248,50 +239,14 @@ class E2ETestRunner:
             # If the loop finishes, handle the timeout message
             if not any(self.extracted_dir.iterdir()):
                 self.console.print(
-                    "[bold red]Polling timed out. No valid bundles were downloaded and extracted.[/bold red]")
+                    "[bold red]Polling timed out. No valid bundles were downloaded and extracted.[/bold red]"
+                )
             else:
                 self.console.print(
-                    "[bold yellow]Polling timed out. Not all expected files were found in the downloaded bundles.[/bold yellow]")
+                    "[bold yellow]Polling timed out. Not all expected files were found in the downloaded bundles.[/bold yellow]"
+                )
 
-    def _verify_aws_connectivity(self):
-        """
-        Performs pre-flight checks to ensure AWS credentials are set and buckets are accessible.
-        Raises specific, user-friendly exceptions on failure.
-        """
-        self.console.print("\n--- [bold blue]Pre-flight Checks[/bold blue] ---")
-        try:
-            self.s3.head_bucket(Bucket=self.config.landing_bucket)
-            self.console.log(
-                f"[green]✓[/green] Access confirmed for landing bucket: '{self.config.landing_bucket}'"
-            )
-
-            self.s3.head_bucket(Bucket=self.config.distribution_bucket)
-            self.console.log(
-                f"[green]✓[/green] Access confirmed for distribution bucket: '{self.config.distribution_bucket}'"
-            )
-
-        except botocore.exceptions.NoCredentialsError:
-            raise RuntimeError(
-                "AWS credentials not found. Please configure them using one of the following methods:\n"
-                "  1. Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)\n"
-                "  2. A shared credentials file (~/.aws/credentials)\n"
-                "  3. An IAM role attached to the EC2 instance or ECS task."
-            ) from None  # <--- THIS IS THE KEY CHANGE
-
-        except botocore.exceptions.ClientError as e:
-            if e.response["Error"]["Code"] == "404":
-                raise RuntimeError(
-                    f"A specified S3 bucket does not exist: {e.response['Error']['BucketName']}. "
-                    "Please check your configuration."
-                ) from None  # <--- AND HERE
-            if e.response["Error"]["Code"] == "403":
-                raise RuntimeError(
-                    f"Access denied to S3 bucket: {e.response['Error']['BucketName']}. "
-                    "Please check IAM permissions."
-                ) from None  # <--- AND HERE
-            raise RuntimeError(
-                f"An AWS client error occurred: {e}"
-            ) from None  # <--- AND HERE for the catch-all
+    # _validate_one_file,
 
     def _validate_one_file(
         self, source_record: SourceFile, extracted_path: Path
@@ -331,15 +286,19 @@ class E2ETestRunner:
 
         # The rest of the validation logic can now proceed without changes.
         with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                console=self.console
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=self.console,
         ) as progress:
-            validation_task = progress.add_task("[cyan]Validating file integrity...", total=len(source_map))
+            validation_task = progress.add_task(
+                "[cyan]Validating file integrity...", total=len(source_map)
+            )
             with ThreadPoolExecutor(max_workers=self.config.concurrency) as executor:
                 future_to_key = {
-                    executor.submit(self._validate_one_file, source_record, extracted_map[key]): key
+                    executor.submit(
+                        self._validate_one_file, source_record, extracted_map[key]
+                    ): key
                     for key, source_record in source_map.items()
                     if key in extracted_map
                 }
@@ -350,13 +309,24 @@ class E2ETestRunner:
         # Check for missing files
         missing_keys = source_map.keys() - extracted_map.keys()
         for key in missing_keys:
-            results.append({"key": key, "status": "FAIL", "details": "File not found in any output bundle."})
+            results.append(
+                {
+                    "key": key,
+                    "status": "FAIL",
+                    "details": "File not found in any output bundle.",
+                }
+            )
 
         # Check for extra files
         extra_keys = extracted_map.keys() - source_map.keys()
         for key in extra_keys:
             results.append(
-                {"key": key, "status": "FAIL", "details": "Extracted file was not in the original manifest."})
+                {
+                    "key": key,
+                    "status": "FAIL",
+                    "details": "Extracted file was not in the original manifest.",
+                }
+            )
 
         return sorted(results, key=lambda x: x["key"])
 
@@ -439,17 +409,59 @@ class E2ETestRunner:
             shutil.rmtree(self.local_workspace)
             self.console.log("Cleaned up local workspace.")
 
+    def _verify_aws_connectivity(self):
+        """
+        Performs pre-flight checks to ensure AWS credentials are set and buckets are accessible.
+        Raises specific, user-friendly exceptions on failure.
+        """
+        self.console.print("\n--- [bold blue]Pre-flight Checks[/bold blue] ---")
+        try:
+            self.s3.head_bucket(Bucket=self.config.landing_bucket)
+            self.console.log(
+                f"[green]✓[/green] Access confirmed for landing bucket: '{self.config.landing_bucket}'"
+            )
+
+            self.s3.head_bucket(Bucket=self.config.distribution_bucket)
+            self.console.log(
+                f"[green]✓[/green] Access confirmed for distribution bucket: '{self.config.distribution_bucket}'"
+            )
+
+        except botocore.exceptions.NoCredentialsError:
+            raise RuntimeError(
+                "AWS credentials not found. Please configure them using one of the following methods:\n"
+                "  1. Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)\n"
+                "  2. A shared credentials file (~/.aws/credentials)\n"
+                "  3. An IAM role attached to the EC2 instance or ECS task."
+            ) from None
+
+        except botocore.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] == "404":
+                raise RuntimeError(
+                    f"A specified S3 bucket does not exist: {e.response['Error']['BucketName']}. "
+                    "Please check your configuration."
+                ) from None  # <--- AND HERE
+            if e.response["Error"]["Code"] == "403":
+                raise RuntimeError(
+                    f"Access denied to S3 bucket: {e.response['Error']['BucketName']}. "
+                    "Please check IAM permissions."
+                ) from None  # <--- AND HERE
+            raise RuntimeError(
+                f"An AWS client error occurred: {e}"
+            ) from None  # <--- AND HERE for the catch-all
+
     def run(self) -> int:
         """Executes the full test lifecycle."""
         manifest = None
         try:
-            self.console.print(Panel(
-                f"[cyan bold]{self.config.description}[/cyan bold]\n\n"
-                f"Run ID: [bold blue]{self.run_id}[/bold blue]\n"
-                f"Workspace: {self.local_workspace}",
-                title="Test Case",
-                expand=False,
-            ))
+            self.console.print(
+                Panel(
+                    f"[cyan bold]{self.config.description}[/cyan bold]\n\n"
+                    f"Run ID: [bold blue]{self.run_id}[/bold blue]\n"
+                    f"Workspace: {self.local_workspace}",
+                    title="Test Case",
+                    expand=False,
+                )
+            )
 
             self._verify_aws_connectivity()  # Call the new pre-flight check method
 
@@ -469,11 +481,11 @@ class E2ETestRunner:
             return 0 if all(r["status"] == "PASS" for r in results) else 1
 
         except RuntimeError as e:
-            self.console.print(f"\n[bold red]❌ TEST SETUP FAILED[/bold red]\n")
+            self.console.print("\n[bold red]❌ TEST SETUP FAILED[/bold red]\n")
             self.console.print(
                 Panel(str(e), title="Configuration Error", border_style="red")
             )
-            # --- VERBOSE FLAG IN ACTION ---
+
             if self.config.verbose:
                 self.console.print(
                     "\n[yellow]Verbose mode enabled. Full traceback:[/yellow]"
@@ -483,7 +495,7 @@ class E2ETestRunner:
 
         except Exception as e:
             self.console.print(
-                f"\n[bold red]An unexpected error occurred during the test run.[/bold red]"
+                "\n[bold red]An unexpected error occurred during the test run.[/bold red]"
             )
             # --- VERBOSE FLAG IN ACTION ---
             if self.config.verbose:
@@ -500,82 +512,3 @@ class E2ETestRunner:
 
         finally:
             self._cleanup(manifest)
-
-
-def load_configuration(args: argparse.Namespace) -> Config:
-    """Loads configuration from file and overrides with CLI arguments."""
-    config_data = {}
-    if args.config:
-        with open(args.config) as f:
-            config_data = json.load(f)
-
-    # Pop the description out so it's not treated as a runtime argument later.
-    # Provide a default if it's not in the file.
-    description = config_data.pop("description", "E2E Test Run")
-
-    # Override file config with any provided CLI args
-    cli_args = {key: value for key, value in vars(args).items() if value is not None and key != 'config'}
-    config_data.update(cli_args)
-
-    # Store the final merged config for the manifest (without the description)
-    raw_config = config_data.copy()
-
-    # Re-add the description to the data used to create the Config object
-    config_data["description"] = description
-
-    # Validate required fields
-    if "landing_bucket" not in config_data or "distribution_bucket" not in config_data:
-        raise ValueError(
-            "The --landing_bucket and --distribution_bucket are required, "
-            "either via CLI or config file."
-        )
-
-    # Use dictionary unpacking to create the Config object
-    return Config(raw_config=raw_config, **config_data)
-
-
-def main():
-    """Main entry point for the test runner script."""
-    parser = argparse.ArgumentParser(
-        description="End-to-end test system for a data aggregator pipeline.",
-        formatter_class=argparse.RawTextHelpFormatter,
-    )
-    parser.add_argument("-c", "--config", help="Path to a JSON configuration file.")
-    parser.add_argument(
-        "--landing-bucket", help="S3 bucket for uploading source files."
-    )
-    parser.add_argument("--distribution-bucket", help="S3 bucket for final bundles.")
-    parser.add_argument(
-        "--num-files", type=int, help="Number of source files to generate."
-    )
-    parser.add_argument("--size-mb", type=int, help="Size of each source file in MB.")
-    parser.add_argument("--concurrency", type=int, help="Number of parallel workers.")
-    parser.add_argument(
-        "--timeout-seconds", type=int, help="Timeout for the consumer phase."
-    )
-    parser.add_argument(
-        "--keep-files",
-        action="store_true",
-        help="Do not delete local files on completion.",
-    )
-    parser.add_argument("--report-file", help="Path to save a JUnit XML test report.")
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose output, including full exception tracebacks.",
-    )
-    args = parser.parse_args()
-
-    try:
-        config = load_configuration(args)
-        runner = E2ETestRunner(config)
-        exit_code = runner.run()
-        exit(exit_code)
-    except (ValueError, FileNotFoundError) as e:
-        print(f"Configuration Error: {e}")
-        exit(2)
-
-
-if __name__ == "__main__":
-    main()

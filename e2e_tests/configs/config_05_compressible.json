@@ -1,0 +1,12 @@
+{
+  "description": "Tests the pipeline's ability to handle and compress repetitive text data. The final bundle should be much smaller than the source files.",
+  "generator_type": "compressible",
+  "landing_bucket": "data-aggregator-landing-dev",
+  "distribution_bucket": "data-aggregator-distribution-dev",
+  "num_files": 10,
+  "size_mb": 10,
+  "concurrency": 10,
+  "timeout_seconds": 600,
+  "report_file": "results_05_compressible.xml",
+  "verbose": false
+}

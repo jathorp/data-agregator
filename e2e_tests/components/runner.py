@@ -9,6 +9,7 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Set, TypedDict, Any
 
@@ -83,7 +84,6 @@ class E2ETestRunner:
 
         # We only need this special config for the Lambda client. The S3 client is fine.
         self.lambda_client = boto3.client("lambda", config=self.lambda_client_config)
-
 
         self.s3 = boto3.client("s3")
         self.console = Console()
@@ -273,8 +273,6 @@ class E2ETestRunner:
                     "[bold yellow]Polling timed out. Not all expected files were found in the downloaded bundles.[/bold yellow]"
                 )
 
-    # _validate_one_file,
-
     def _validate_one_file(
         self, source_record: SourceFile, extracted_path: Path
     ) -> ValidationResult:
@@ -436,6 +434,40 @@ class E2ETestRunner:
             shutil.rmtree(self.local_workspace)
             self.console.log("Cleaned up local workspace.")
 
+    def _cleanup_stale_bundles(self, older_than_seconds: int = 240):
+        """Deletes old test bundles from the distribution bucket to ensure a clean state."""
+        self.console.print("\n--- [bold yellow]Pre-Test Cleanup[/bold yellow] ---")
+        try:
+            paginator = self.s3.get_paginator('list_objects_v2')
+            pages = paginator.paginate(Bucket=self.config.distribution_bucket)
+
+            stale_objects = []
+            now = datetime.now(timezone.utc)
+
+            for page in pages:
+                for obj in page.get("Contents", []):
+                    # Check if it looks like a bundle and is older than the threshold
+                    if "bundle-" in obj["Key"] and (now - obj["LastModified"]).total_seconds() > older_than_seconds:
+                        stale_objects.append({"Key": obj["Key"]})
+
+            if not stale_objects:
+                self.console.log("No stale bundles found in distribution bucket. Environment is clean.")
+                return
+
+            self.console.log(f"Found {len(stale_objects)} stale bundle(s) to delete...")
+            # S3 delete_objects has a limit of 1000 keys per request
+            for i in range(0, len(stale_objects), 1000):
+                chunk = stale_objects[i:i + 1000]
+                self.s3.delete_objects(
+                    Bucket=self.config.distribution_bucket,
+                    Delete={"Objects": chunk}
+                )
+            self.console.log("[green]✓ Stale bundles cleaned up successfully.[/green]")
+
+        except Exception as e:
+            self.console.log(f"[bold red]Could not perform pre-test cleanup: {e}[/bold red]")
+            # We don't fail the test here, just log a warning.
+
     def _verify_aws_connectivity(self):
         """
         Performs pre-flight checks to ensure AWS credentials are set and buckets are accessible.
@@ -491,6 +523,7 @@ class E2ETestRunner:
             )
 
             self._verify_aws_connectivity()  # Call the new pre-flight check method
+            self._cleanup_stale_bundles() # Try and revove any old test files
 
             if self.config.test_type == "direct_invoke":
                 return self._run_direct_invoke_test()

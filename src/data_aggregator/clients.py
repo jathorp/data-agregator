@@ -9,7 +9,11 @@ incorporate best practices like typed interfaces and efficient API usage.
 """
 
 import logging
-from typing import Any, BinaryIO, TYPE_CHECKING, Optional
+from typing import BinaryIO, TYPE_CHECKING, Optional, cast
+
+from botocore.exceptions import ClientError
+
+from .exceptions import ObjectNotFoundError
 
 if TYPE_CHECKING:
     from mypy_boto3_s3.client import S3Client as S3ClientType
@@ -38,13 +42,24 @@ class S3Client:
                 extra={"kms_key_id": self._kms_key_id},
             )
 
-    def get_file_content_stream(self, bucket: str, key: str) -> Any:
-        """Gets an object from S3 as a streaming body."""
-        logger.debug(
-            "Requesting S3 object stream", extra={"bucket": bucket, "key": key}
-        )
-        response = self._client.get_object(Bucket=bucket, Key=key)
-        return response["Body"]
+    def get_file_content_stream(self, bucket: str, key: str) -> BinaryIO:
+        """
+        Retrieves an S3 object's body as a file-like streaming object.
+        Raises ObjectNotFoundError if the key does not exist.
+        """
+        try:
+            response = self._client.get_object(Bucket=bucket, Key=key)
+            return cast(BinaryIO, response["Body"])
+        except ClientError as e:
+            # Check if the specific error code is 'NoSuchKey'.
+            if e.response['Error']['Code'] == 'NoSuchKey':
+                # Raise our clean, application-specific exception.
+                raise ObjectNotFoundError(
+                    f"S3 object not found at bucket='{bucket}', key='{key}'"
+                ) from e
+            else:
+                # If it's a different client error (like AccessDenied), re-raise it.
+                raise
 
     def upload_gzipped_bundle(
         self, bucket: str, key: str, file_obj: BinaryIO, content_hash: str

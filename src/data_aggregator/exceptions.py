@@ -22,3 +22,7 @@ class BatchTooLargeError(SQSBatchProcessingError):
 
 class TransientDynamoError(SQSBatchProcessingError):
     """Raised for transient DynamoDB issues during the idempotency check."""
+
+class ObjectNotFoundError(Exception):
+    """Custom exception raised when a requested S3 object does not exist."""
+    pass

@@ -14,6 +14,7 @@ from typing import List, Optional, Set, TypedDict, Any
 
 import boto3
 import botocore
+from botocore.client import Config as BotocoreConfig
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import (
@@ -70,6 +71,20 @@ class E2ETestRunner:
 
     def __init__(self, config: Config):
         self.config = config
+
+        # Create a custom botocore config with a longer timeout for the Lambda client.
+        # The Lambda function itself can run for up to 15 minutes (900s), so we
+        # need a client-side timeout that is slightly longer.
+        self.lambda_client_config = BotocoreConfig(
+            read_timeout=900,
+            connect_timeout=10,
+            retries={'max_attempts': 2}
+        )
+
+        # We only need this special config for the Lambda client. The S3 client is fine.
+        self.lambda_client = boto3.client("lambda", config=self.lambda_client_config)
+
+
         self.s3 = boto3.client("s3")
         self.console = Console()
         self.run_id = f"e2e-test-{uuid.uuid4().hex[:8]}"
@@ -563,12 +578,11 @@ class E2ETestRunner:
         }
 
         # 3. Invoke the Lambda function directly.
-        lambda_client = boto3.client("lambda")
         self.console.print(
             f"Directly invoking Lambda '{self.config.lambda_function_name}' with {len(payload['records'])} records.")
 
         try:
-            response = lambda_client.invoke(
+            response = self.lambda_client.invoke(
                 FunctionName=self.config.lambda_function_name, # <-- CORRECTED
                 InvocationType='RequestResponse',
                 LogType='Tail',

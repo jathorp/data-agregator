@@ -36,6 +36,12 @@ variable "distribution_bucket_name" {
   type        = string
 }
 
+variable "s3_event_notification_prefix" {
+  description = "The prefix for which S3 events should trigger the SQS notification. Allows for separating test data."
+  type        = string
+  default     = ""
+}
+
 # --- SQS Variables ---
 variable "main_queue_name" {
   description = "The name of the main SQS processing queue."

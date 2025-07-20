@@ -347,8 +347,9 @@ resource "aws_sqs_queue_policy" "s3_to_sqs" {
 resource "aws_s3_bucket_notification" "landing_to_sqs" {
   bucket = aws_s3_bucket.landing.id
   queue {
-    queue_arn = aws_sqs_queue.main.arn
-    events    = ["s3:ObjectCreated:*"]
+    queue_arn     = aws_sqs_queue.main.arn
+    events        = ["s3:ObjectCreated:*"]
+    filter_prefix = var.s3_event_notification_prefix
   }
   depends_on = [aws_sqs_queue_policy.s3_to_sqs]
 }

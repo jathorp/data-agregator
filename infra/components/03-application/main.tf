@@ -109,10 +109,10 @@ resource "aws_security_group" "aggregator_lambda_sg" {
 # -----------------------------------------------------------------------------
 
 resource "aws_lambda_function" "aggregator" {
-  function_name                  = var.lambda_function_name
-  role                           = data.terraform_remote_state.stateful.outputs.lambda_iam_role_arn
-  handler                        = "data_aggregator.app.handler"
-  runtime                        = var.lambda_runtime
+  function_name = var.lambda_function_name
+  role          = data.terraform_remote_state.stateful.outputs.lambda_iam_role_arn
+  handler       = "data_aggregator.app.handler"
+  runtime       = var.lambda_runtime
 
   # The primary goal of this aggregator is to maximize compression efficiency and
   # minimize the number of output files. Limiting concurrency to 1 ensures that

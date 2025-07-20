@@ -5,7 +5,7 @@
   "num_files": 50,
   "size_mb": 1,
   "concurrency": 16,
-  "timeout_seconds": 300,
+  "timeout_seconds": 120,
   "report_file": "results_01_batching.xml",
   "verbose": false
 }

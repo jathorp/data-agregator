@@ -8,7 +8,7 @@
   "num_files": 10,
   "size_mb": 50,
   "concurrency": 10,
-  "timeout_seconds": 900,
+  "timeout_seconds": 240,
   "report_file": "results_06_disk_limit.xml",
   "verbose": false
 }

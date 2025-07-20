@@ -5,7 +5,7 @@
   "num_files": 100,
   "size_mb": 1,
   "concurrency": 25,
-  "timeout_seconds": 600,
+  "timeout_seconds": 120,
   "report_file": "results_04_concurrency.xml",
   "verbose": false
 }

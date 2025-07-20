@@ -5,7 +5,7 @@
   "num_files": 5,
   "size_mb": 0,
   "concurrency": 5,
-  "timeout_seconds": 300,
+  "timeout_seconds": 120,
   "report_file": "results_03_zero_byte.xml",
   "verbose": false
 }

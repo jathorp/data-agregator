@@ -6,7 +6,7 @@
   "num_files": 10,
   "size_mb": 10,
   "concurrency": 10,
-  "timeout_seconds": 600,
+  "timeout_seconds": 120,
   "report_file": "results_05_compressible.xml",
   "verbose": false
 }

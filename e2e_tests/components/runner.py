@@ -744,9 +744,11 @@ class E2ETestRunner:
         # 3. Verify the idempotency record was written to DynamoDB.
         try:
             ddb = boto3.client("dynamodb")
+            hashed_key = hashlib.sha256(idempotency_key.encode()).hexdigest()
             item = ddb.get_item(
                 TableName=self.config.idempotency_table_name,
-                Key={"object_key": {"S": idempotency_key}},
+                Key={"object_key": {"S": hashed_key}},
+                ConsistentRead=True,
             )
             if "Item" not in item:
                 self.console.print(

@@ -89,7 +89,7 @@ class E2ETestRunner:
         self.run_id = f"e2e-test-{uuid.uuid4().hex[:8]}"
 
         # Set the S3 prefix based on the test type to isolate test data.
-        if self.config.test_type == "direct_invoke":
+        if self.config.test_type in ['direct_invoke', 'idempotency_check']:
             # For direct invoke tests, use a prefix that SQS is NOT listening to.
             # This prevents a race condition with an SQS-triggered Lambda.
             base_prefix = "direct-invoke-tests"

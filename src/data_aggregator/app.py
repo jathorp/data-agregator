@@ -13,7 +13,7 @@ responsible for:
     upload the final Gzip bundle.
 6.  Implementing robust partial batch failure handling.
 """
-
+import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -91,6 +91,9 @@ def _make_idempotency_key(bucket: str, key: str, version: str | None) -> str:
     persistence_store=idempotency_persistence_layer,
 )
 def _process_record_idempotently(*, data: dict[str, Any]) -> bool:
+    hashed = hashlib.sha256(data["idempotency_key"].encode()).hexdigest()
+    logger.info("DEBUG: hashed_key=%s", hashed)   # remove after verifying
+
     """Wraps the idempotency check. If it runs, the item is not a duplicate."""
     logger.debug("Idempotency check passed for new item.", extra=data)
     return True

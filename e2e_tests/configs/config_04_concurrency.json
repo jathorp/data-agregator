@@ -1,11 +1,11 @@
 {
-  "description": "This test uploads many files with high parallelism to stress the SQS queue\nand the idempotency table. The goal is to ensure that despite the concurrent\nload, exactly 100 files are processed, no more and no less.",
+  "description": "This test uploads many files with high parallelism to stress the SQS queue\nand the idempotency table. The goal is to ensure that despite the concurrent\nload, exactly 200 files are processed, no more and no less.",
   "landing_bucket": "data-aggregator-landing-dev",
   "distribution_bucket": "data-aggregator-distribution-dev",
-  "num_files": 100,
+  "num_files": 200,
   "size_mb": 1,
   "concurrency": 25,
-  "timeout_seconds": 120,
+  "timeout_seconds": 360,
   "report_file": "results_04_concurrency.xml",
   "verbose": false
 }

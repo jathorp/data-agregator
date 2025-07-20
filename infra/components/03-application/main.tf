@@ -36,6 +36,12 @@ resource "aws_iam_policy" "aggregator_lambda_policy" {
         Resource = "${data.terraform_remote_state.stateful.outputs.landing_bucket_arn}/*"
       },
       {
+        # Lambda needs to be able to list the landing bucket.
+        Action   = "s3:ListBucket"
+        Effect   = "Allow"
+        Resource = data.terraform_remote_state.stateful.outputs.landing_bucket_arn
+      },
+      {
         # Lambda only needs to write the final bundle to the distribution bucket.
         Action   = "s3:PutObject"
         Effect   = "Allow"

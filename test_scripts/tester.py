@@ -67,9 +67,9 @@ class Config:
     keep_files: bool = False
     timeout_seconds: int = 300
     report_file: Optional[str] = None
-    # A field to store the original CLI/file config for the manifest
     raw_config: Dict[str, Any] = field(default_factory=dict, repr=False)
     verbose: bool = False
+    description: str = "E2E Test Run"
 
 
 # --- Main Test System Class ---
@@ -443,13 +443,13 @@ class E2ETestRunner:
         """Executes the full test lifecycle."""
         manifest = None
         try:
-            self.console.print(
-                Panel(
-                    f"Starting E2E Test Run\nRun ID: [bold blue]{self.run_id}[/bold blue]\nWorkspace: {self.local_workspace}",
-                    title="Setup",
-                    expand=False,
-                )
-            )
+            self.console.print(Panel(
+                f"[cyan bold]{self.config.description}[/cyan bold]\n\n"
+                f"Run ID: [bold blue]{self.run_id}[/bold blue]\n"
+                f"Workspace: {self.local_workspace}",
+                title="Test Case",
+                expand=False,
+            ))
 
             self._verify_aws_connectivity()  # Call the new pre-flight check method
 
@@ -509,24 +509,28 @@ def load_configuration(args: argparse.Namespace) -> Config:
         with open(args.config) as f:
             config_data = json.load(f)
 
+    # Pop the description out so it's not treated as a runtime argument later.
+    # Provide a default if it's not in the file.
+    description = config_data.pop("description", "E2E Test Run")
+
     # Override file config with any provided CLI args
-    cli_args = {
-        key: value
-        for key, value in vars(args).items()
-        if value is not None and key != "config"
-    }
+    cli_args = {key: value for key, value in vars(args).items() if value is not None and key != 'config'}
     config_data.update(cli_args)
 
-    # Store the final merged config for the manifest
+    # Store the final merged config for the manifest (without the description)
     raw_config = config_data.copy()
+
+    # Re-add the description to the data used to create the Config object
+    config_data["description"] = description
 
     # Validate required fields
     if "landing_bucket" not in config_data or "distribution_bucket" not in config_data:
         raise ValueError(
-            "The --landing-bucket and --distribution-bucket are required, "
+            "The --landing_bucket and --distribution_bucket are required, "
             "either via CLI or config file."
         )
 
+    # Use dictionary unpacking to create the Config object
     return Config(raw_config=raw_config, **config_data)
 
 

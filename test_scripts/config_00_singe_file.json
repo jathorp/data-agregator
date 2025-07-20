@@ -1,4 +1,5 @@
 {
+  "description": "Simple test to upload a single file and validate it.",
   "landing_bucket": "data-aggregator-landing-dev",
   "distribution_bucket": "data-aggregator-distribution-dev",
   "num_files": 1,

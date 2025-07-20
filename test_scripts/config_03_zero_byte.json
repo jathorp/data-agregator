@@ -1,4 +1,5 @@
 {
+  "description": "This test validates the system's handling of zero-byte files.",
   "landing_bucket": "data-aggregator-landing-dev",
   "distribution_bucket": "data-aggregator-distribution-dev",
   "num_files": 5,

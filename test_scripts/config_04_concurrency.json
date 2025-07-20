@@ -1,4 +1,5 @@
 {
+  "description": "This test uploads many files with high parallelism to stress the SQS queue\nand the idempotency table. The goal is to ensure that despite the concurrent\nload, exactly 100 files are processed, no more and no less.",
   "landing_bucket": "data-aggregator-landing-dev",
   "distribution_bucket": "data-aggregator-distribution-dev",
   "num_files": 100,

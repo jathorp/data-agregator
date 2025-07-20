@@ -80,6 +80,7 @@ idempotency_persistence_layer.configure(config=idempotency_config)
 )
 def _process_record_idempotently(*, data: dict[str, Any]) -> bool:
     """Wraps the idempotency check. If it runs, the item is not a duplicate."""
+    # Maybe we should keep this at info - it is needed for the test system?
     logger.debug("Idempotency check passed for new item.", extra=data)
     return True
 

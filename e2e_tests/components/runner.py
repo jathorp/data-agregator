@@ -640,13 +640,7 @@ class E2ETestRunner:
             self.console.print(
                 "\n[bold green]✅ TEST PASSED: Lambda correctly detected the disk limit and stopped processing.[/bold green]")
 
-            # 6. Validate the partial results
-            self._consume_and_download(manifest)
-            results = self._validate_results(manifest)
-            self._display_and_report(results)
-
-            # Make the failure check robust and not hardcoded.
-            # These values should match the constants in your core.py
+            # Dynamically calculate how many files we EXPECT to have been processed.
             MAX_BUNDLE_ON_DISK_BYTES = 400 * 1024 * 1024
             file_size_bytes = self.config.size_mb * 1024 * 1024
 
@@ -655,16 +649,29 @@ class E2ETestRunner:
             else:
                 max_files_in_bundle = MAX_BUNDLE_ON_DISK_BYTES // file_size_bytes
 
-            expected_failures = self.config.num_files - max_files_in_bundle
-            actual_failures = sum(1 for r in results if r['status'] == 'FAIL')
+            # Create a new, smaller manifest containing only the files we expect to find.
+            # The source_files in the manifest are already sorted by name.
+            expected_manifest: TestManifest = {
+                "run_id": manifest["run_id"],
+                "start_time": manifest["start_time"],
+                "config": manifest["config"],
+                "source_files": manifest["source_files"][:max_files_in_bundle]
+            }
 
-            if actual_failures == expected_failures:
-                self.console.print(
-                    f"[bold green]✅ Validation confirms {actual_failures} files were correctly left unprocessed as expected.[/bold green]")
+            self.console.print(
+                f"\nProceeding to validate the partial bundle. Expecting {len(expected_manifest['source_files'])} files.")
+
+            # Now, run the consumer and validator against this *expected partial manifest*.
+            self._consume_and_download(expected_manifest)
+            results = self._validate_results(expected_manifest)
+            self._display_and_report(results)
+
+            # The test PASSES if all expected files passed validation.
+            if all(r['status'] == 'PASS' for r in results):
+                self.console.print("[bold green]✅ Validation confirms the partial bundle is correct.[/bold green]")
                 return 0
             else:
-                self.console.print(
-                    f"[bold red]❌ Validation failed. Expected {expected_failures} unprocessed files, but found {actual_failures}.[/bold red]")
+                self.console.print("[bold red]❌ Validation of the partial bundle failed.[/bold red]")
                 return 1
 
         else:

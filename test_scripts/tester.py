@@ -226,7 +226,7 @@ class E2ETestRunner:
                         self.processed_bundle_keys.add(bundle_key)
 
                         with tarfile.open(local_bundle_path, "r:gz") as tar:
-                            tar.extractall(path=self.extracted_dir)
+                            tar.extractall(path=self.extracted_dir, filter='data')
                         progress.log(f"  [green]✓[/green] Successfully extracted [magenta]{bundle_key}[/magenta].")
 
                     except tarfile.ReadError as e:
@@ -310,28 +310,31 @@ class E2ETestRunner:
         """Compares manifest against extracted files in parallel, returning structured results."""
         self.console.print("\n--- [bold green]Validation Phase[/bold green] ---")
         source_map = {item["key"]: item for item in manifest["source_files"]}
+
+        # --- THIS IS THE CORRECTED LOGIC ---
+        # 1. Use rglob('*') to search recursively through all subdirectories.
+        # 2. Use p.relative_to() to get the path as it was inside the tarball.
         extracted_map = {
-            f"{self.s3_prefix}/{p.name}": p
-            for p in self.extracted_dir.glob("*")
+            str(p.relative_to(self.extracted_dir)): p
+            for p in self.extracted_dir.rglob("*")
             if p.is_file()
         }
+        # The keys in extracted_map will now correctly be like:
+        # 'e2e-test-6f7e65fb/source_file_0001.bin'
 
         results: List[ValidationResult] = []
 
+        # The rest of the validation logic can now proceed without changes.
         with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            console=self.console,
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                console=self.console
         ) as progress:
-            validation_task = progress.add_task(
-                "[cyan]Validating file integrity...", total=len(source_map)
-            )
+            validation_task = progress.add_task("[cyan]Validating file integrity...", total=len(source_map))
             with ThreadPoolExecutor(max_workers=self.config.concurrency) as executor:
                 future_to_key = {
-                    executor.submit(
-                        self._validate_one_file, source_record, extracted_map[key]
-                    ): key
+                    executor.submit(self._validate_one_file, source_record, extracted_map[key]): key
                     for key, source_record in source_map.items()
                     if key in extracted_map
                 }
@@ -339,27 +342,16 @@ class E2ETestRunner:
                     results.append(future.result())
                     progress.update(validation_task, advance=1)
 
-        # Check for missing files (those in source but not extracted)
+        # Check for missing files
         missing_keys = source_map.keys() - extracted_map.keys()
         for key in missing_keys:
-            results.append(
-                {
-                    "key": key,
-                    "status": "FAIL",
-                    "details": "File not found in any output bundle.",
-                }
-            )
+            results.append({"key": key, "status": "FAIL", "details": "File not found in any output bundle."})
 
-        # Check for extra files (those in extracted but not source)
+        # Check for extra files
         extra_keys = extracted_map.keys() - source_map.keys()
         for key in extra_keys:
             results.append(
-                {
-                    "key": key,
-                    "status": "FAIL",
-                    "details": "Extracted file was not in the original manifest.",
-                }
-            )
+                {"key": key, "status": "FAIL", "details": "Extracted file was not in the original manifest."})
 
         return sorted(results, key=lambda x: x["key"])
 

@@ -162,6 +162,18 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
     metrics.add_dimension("environment", CONFIG.environment)
     idempotency_config.register_lambda_context(context)
 
+    # --- Handle direct invocation for testing ---
+    if event.get("e2e_test_direct_invoke"):
+        logger.warning("Direct invocation test detected, bypassing SQS parsing.")
+        # We can skip idempotency for this controlled test, as we are creating the batch.
+        records_to_process = event.get("records", [])
+        # We don't have SQS message IDs, so this map is empty.
+        record_to_message_id_map = {}
+        # We can't report partial failures for direct invokes, so we run and let it fail on error.
+        _process_valid_records(records_to_process, record_to_message_id_map, context)
+        return {"batchItemFailures": []}
+    # --- End test block ---
+
     sqs_records: list[dict] = event.get("Records", [])
     if not sqs_records:
         logger.warning("Event did not contain any SQS records. Exiting gracefully.")

@@ -1,5 +1,5 @@
 # e2e_tests/components/runner.py
-
+import base64
 import hashlib
 import json
 import shutil
@@ -465,6 +465,9 @@ class E2ETestRunner:
 
             self._verify_aws_connectivity()  # Call the new pre-flight check method
 
+            if self.config.test_type == "direct_invoke":
+                return self._run_direct_invoke_test()
+
             manifest = self._produce_and_upload()
             self.console.print(
                 "[green]✓ Producer finished.[/green] All source files uploaded."
@@ -497,7 +500,6 @@ class E2ETestRunner:
             self.console.print(
                 "\n[bold red]An unexpected error occurred during the test run.[/bold red]"
             )
-            # --- VERBOSE FLAG IN ACTION ---
             if self.config.verbose:
                 self.console.print(
                     "\n[yellow]Verbose mode enabled. Full traceback:[/yellow]"
@@ -512,3 +514,101 @@ class E2ETestRunner:
 
         finally:
             self._cleanup(manifest)
+
+    def _run_direct_invoke_test(self) -> int:
+        """
+        Runs a test by directly invoking the Lambda with a crafted payload.
+        This is used for testing scenarios that require a guaranteed large batch.
+        """
+        self.console.print("\n--- [bold blue]Direct Invocation Test[/bold blue] ---")
+
+        if not self.config.lambda_function_name:
+            self.console.print(
+                "[bold red]Configuration Error: 'lambda_function_name' must be set for a 'direct_invoke' test.[/bold red]"
+            )
+            return 2 # Setup failure code
+
+        # 1. Produce files as normal
+        manifest = self._produce_and_upload()
+        self.console.print("[green]✓ Source files created.[/green]")
+
+        # 2. Construct the S3EventRecord-like payload for the Lambda.
+        lambda_payload_records = []
+        for source_file in manifest["source_files"]:
+            bucket_name = self.config.landing_bucket
+            # This mimics the structure of a real S3 event notification.
+            record = {
+                "s3": {
+                    "bucket": {"name": bucket_name, "arn": f"arn:aws:s3:::{bucket_name}"},
+                    "object": {"key": source_file["key"], "size": source_file["size"]}
+                }
+            }
+            lambda_payload_records.append(record)
+
+        payload = {
+            "e2e_test_direct_invoke": True,
+            "records": lambda_payload_records
+        }
+
+        # 3. Invoke the Lambda function directly.
+        lambda_client = boto3.client("lambda")
+        self.console.print(
+            f"Directly invoking Lambda '{self.config.lambda_function_name}' with {len(payload['records'])} records.")
+
+        try:
+            response = lambda_client.invoke(
+                FunctionName=self.config.lambda_function_name, # <-- CORRECTED
+                InvocationType='RequestResponse',
+                LogType='Tail',
+                Payload=json.dumps(payload),
+            )
+        except Exception as e:
+            self.console.print(f"[bold red]Lambda invocation failed: {e}[/bold red]")
+            return 1
+
+        # 4. Analyze the response and logs.
+        log_result = base64.b64decode(response.get('LogResult', b'')).decode('utf-8')
+
+        self.console.print("\n--- [bold yellow]Lambda Log Tail[/bold yellow] ---")
+        self.console.print(Panel(log_result, border_style="yellow"))
+
+        if response.get("FunctionError"):
+            self.console.print("[bold red]❌ TEST FAILED: Lambda function returned an error.[/bold red]")
+            return 1
+
+        # 5. Check for the expected log message
+        if "Predicted disk usage exceeds limit" in log_result:
+            self.console.print(
+                "\n[bold green]✅ TEST PASSED: Lambda correctly detected the disk limit and stopped processing.[/bold green]")
+
+            # 6. Validate the partial results
+            self._consume_and_download(manifest)
+            results = self._validate_results(manifest)
+            self._display_and_report(results)
+
+            # Make the failure check robust and not hardcoded.
+            # These values should match the constants in your core.py
+            MAX_BUNDLE_ON_DISK_BYTES = 400 * 1024 * 1024
+            file_size_bytes = self.config.size_mb * 1024 * 1024
+
+            if file_size_bytes == 0:
+                max_files_in_bundle = self.config.num_files
+            else:
+                max_files_in_bundle = MAX_BUNDLE_ON_DISK_BYTES // file_size_bytes
+
+            expected_failures = self.config.num_files - max_files_in_bundle
+            actual_failures = sum(1 for r in results if r['status'] == 'FAIL')
+
+            if actual_failures == expected_failures:
+                self.console.print(
+                    f"[bold green]✅ Validation confirms {actual_failures} files were correctly left unprocessed as expected.[/bold green]")
+                return 0
+            else:
+                self.console.print(
+                    f"[bold red]❌ Validation failed. Expected {expected_failures} unprocessed files, but found {actual_failures}.[/bold red]")
+                return 1
+
+        else:
+            self.console.print(
+                "[bold red]❌ TEST FAILED: The expected 'disk usage exceeds limit' log message was not found.[/bold red]")
+            return 1

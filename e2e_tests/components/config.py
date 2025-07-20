@@ -14,6 +14,8 @@ class Config:
     distribution_bucket: str
     description: str = "E2E Test Run"
     generator_type: str = "random"  # 'random' or 'compressible'
+    test_type: str = "s3_trigger"  # 's3_trigger' or 'direct_invoke
+    lambda_function_name: Optional[str] = None
     num_files: int = 10
     size_mb: int = 1
     concurrency: int = 8

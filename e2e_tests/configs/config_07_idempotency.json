@@ -1,13 +1,13 @@
 {
-  "description": "Idempotency E2E test (direct invoke twice)",
+  "description": "Tests the idempotency logic by directly invoking the Lambda with the same payload twice. Will only work if DEBUG is enabled.",
   "test_type": "idempotency_check",
   "lambda_function_name": "data-aggregator-processor-dev",
-  "idempotency_table_name": "data-aggregator-idempotency-dev",
   "landing_bucket": "data-aggregator-landing-dev",
-  "distribution_bucket": "data-aggregator-idempotency-dev",
+  "distribution_bucket": "data-aggregator-distribution-dev",
+  "idempotency_table_name": "data-aggregator-idempotency-dev",
   "num_files": 1,
   "size_mb": 1,
   "concurrency": 1,
-  "report_file": "results_idempotency.xml",
+  "report_file": "results_07_idempotency.xml",
   "verbose": false
 }

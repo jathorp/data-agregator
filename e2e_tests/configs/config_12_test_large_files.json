@@ -1,11 +1,11 @@
 {
-  "description": "Tests SQS partial batch failure. Uploads 500MB of data (5x100MB files) to exceed the 400MB bundle limit. Expects the first 4 files to be processed in one invocation, and the 5th to be retried and processed in a second invocation.",
+  "description": "Tests the SQS partial batch failure retry loop. Uploads 10 files of 300MB each. As each Lambda invocation can only process one file before hitting the 400MB bundle limit, this deterministically forces 9 retries, validating the entire feedback mechanism.",
   "test_type": "partial_batch_failure",
   "landing_bucket": "data-aggregator-landing-dev",
   "distribution_bucket": "data-aggregator-distribution-dev",
-  "num_files": 5,
-  "size_mb": 100,
-  "concurrency": 5,
-  "timeout_seconds": 300,
+  "num_files": 10,
+  "size_mb": 300,
+  "concurrency": 10,
+  "timeout_seconds": 600,
   "report_file": "results_12_partial_batch_failure.xml"
 }

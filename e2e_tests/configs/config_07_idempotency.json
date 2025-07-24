@@ -1,5 +1,5 @@
 {
-  "description": "Tests the idempotency logic by directly invoking the Lambda with the same payload twice. Will only work if DEBUG is enabled.",
+  "description": "Validates the core business logic for handling updated data from the supplier. It simulates a file overwrite by uploading a file, waiting for it to be processed, and then uploading a new version to the same key. The test PASSES if a second, distinct bundle is created, proving that the versionId-based idempotency key correctly treats each new version as a unique unit of work.",
   "test_type": "idempotency_check",
   "lambda_function_name": "data-aggregator-processor-dev",
   "landing_bucket": "data-aggregator-landing-dev",
@@ -8,5 +8,6 @@
   "size_mb": 1,
   "concurrency": 1,
   "report_file": "results_07_idempotency.xml",
+  "timeout_seconds": 240,
   "verbose": false
 }

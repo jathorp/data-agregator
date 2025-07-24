@@ -89,13 +89,13 @@ class E2ETestRunner:
         self.run_id = f"e2e-test-{uuid.uuid4().hex[:8]}"
 
         # Set the S3 prefix based on the test type to isolate test data.
-        if self.config.test_type in ["direct_invoke", "idempotency_check"]:
+        if self.config.test_type in ["direct_invoke"]:
             # For direct invoke tests, use a prefix that SQS is NOT listening to.
             # This prevents a race condition with an SQS-triggered Lambda.
             base_prefix = "direct-invoke-tests"
         else:
             # For standard SQS-triggered tests, we MUST use the prefix that SQS
-            # is configured to listen to in our Terraform variables (`data/`).
+            # is configured to listen to (`data/`). This now includes idempotency_check.
             base_prefix = "data"
 
         self.s3_prefix = f"{base_prefix}/{self.run_id}"
@@ -661,21 +661,37 @@ class E2ETestRunner:
             )
             return 1
 
-    def _wait_for_bundle_and_get_key(self, timeout_seconds: int = 60) -> Optional[str]:
+    def _wait_for_bundle_and_get_key(self, timeout_seconds: int = 120) -> Optional[str]:
         """
-        Polls the distribution bucket until a bundle appears or a timeout is reached.
-        Returns the S3 key of the first bundle found.
+        Polls the distribution bucket until a new bundle appears or a timeout is reached.
+        Returns the S3 key of the first new bundle found.
         """
-        self.console.log(f"Polling distribution bucket for a new bundle (timeout: {timeout_seconds}s)...")
-        start_time = time.time()
-        while time.time() - start_time < timeout_seconds:
-            response = self.s3.list_objects_v2(Bucket=self.config.distribution_bucket)
-            for obj in response.get("Contents", []):
-                # Find any object that looks like a bundle and that we haven't seen before.
-                if "bundle-" in obj["Key"] and obj["Key"] not in self.processed_bundle_keys:
-                    self.console.log(f"[green]✓ Found new bundle:[/] [magenta]{obj['Key']}[/magenta]")
-                    return obj["Key"]
-            time.sleep(3)
+        self.console.print(f"[yellow]Polling for new bundle (timeout in {timeout_seconds}s)...[/yellow]")
+
+        with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TimeElapsedColumn(),
+                console=self.console,
+        ) as progress:
+            polling_task = progress.add_task(
+                "[yellow]Waiting...",
+                total=timeout_seconds,
+            )
+
+            start_time = time.time()
+            while time.time() - start_time < timeout_seconds:
+                response = self.s3.list_objects_v2(Bucket=self.config.distribution_bucket)
+                for obj in response.get("Contents", []):
+                    # Find any object that looks like a bundle and that we haven't processed yet.
+                    if "bundle-" in obj["Key"] and obj["Key"] not in self.processed_bundle_keys:
+                        progress.update(polling_task, completed=timeout_seconds, description="[green]Found new bundle!")
+                        self.console.log(f"[green]✓ Found new bundle:[/] [magenta]{obj['Key']}[/magenta]")
+                        return obj["Key"]
+
+                # Update progress and sleep
+                progress.update(polling_task, advance=2)
+                time.sleep(2)
 
         self.console.log("[yellow]Polling timed out. No new bundle was found.[/yellow]")
         return None

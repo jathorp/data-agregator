@@ -501,6 +501,8 @@ class E2ETestRunner:
                 return self._run_idempotency_test()
             elif self.config.test_type == "key_sanitization":
                 return self._run_key_sanitization_test()
+            elif self.config.test_type == "file_not_found":
+                return self._run_file_not_found_test()
 
             self.manifest = self._produce_and_upload()
             self.console.print(
@@ -831,5 +833,62 @@ class E2ETestRunner:
             return 0
         else:
             self.console.print("\n[bold red]❌ TEST FAILED: Validation failed against the sanitized keys.[/bold red]")
+            return 1
+
+
+    def _run_file_not_found_test(self) -> int:
+        """
+        Tests resilience when an S3 object is deleted before processing. It uploads
+        a batch of files, deletes one, and expects the final bundle to contain
+        only the remaining files.
+        """
+        self.console.print("\n--- [bold blue]File Not Found Resilience Test[/bold blue] ---")
+
+        # 1. Use the standard producer to upload the initial batch of files.
+        #    This gives us a manifest of all files that were created.
+        initial_manifest = self._produce_and_upload()
+        self.console.print(
+            f"[green]✓ Producer finished.[/green] {len(initial_manifest['source_files'])} source files uploaded.")
+
+        if not initial_manifest["source_files"]:
+            self.console.print("[bold red]Error: No source files were produced for the test.[/bold red]")
+            return 1
+
+        # 2. Select one file to delete. Let's pick the last one for simplicity.
+        file_to_delete = initial_manifest["source_files"][-1]
+        self.console.log(f"Deleting one object to simulate race condition: [cyan]{file_to_delete['key']}[/cyan]")
+
+        try:
+            self.s3.delete_object(Bucket=self.config.landing_bucket, Key=file_to_delete['key'])
+        except Exception as e:
+            self.console.print(f"[bold red]Failed to delete object from S3: {e}[/bold red]")
+            return 1
+
+        # 3. CRITICAL: Create the final manifest that the validator will use.
+        #    This manifest should ONLY contain the files we expect to find.
+        expected_files = initial_manifest["source_files"][:-1]
+        self.manifest = {
+            "run_id": self.run_id,
+            "start_time": initial_manifest["start_time"],
+            "config": self.config.raw_config,
+            "source_files": expected_files,
+        }
+
+        self.console.log(
+            f"Manifest updated. Expecting to find {len(self.manifest['source_files'])} files in the final bundle.")
+
+        # 4. Run the standard consumer and validator against the *expected* manifest.
+        self._consume_and_download(self.manifest)
+        results = self._validate_results(self.manifest)
+        self._display_and_report(results)
+
+        # 5. The success condition is that all *expected* files passed validation.
+        if all(r["status"] == "PASS" for r in results):
+            self.console.print(
+                "\n[bold green]✅ TEST PASSED: The pipeline correctly skipped the deleted file and processed the rest.[/bold green]")
+            return 0
+        else:
+            self.console.print(
+                "\n[bold red]❌ TEST FAILED: Validation failed. The bundle did not contain the correct set of files.[/bold red]")
             return 1
 

@@ -1,11 +1,11 @@
 {
   "description": "Tests resilience when an S3 object is deleted before processing. Uploads 5 files, deletes 1, and expects a bundle with the remaining 4.",
-  "test_type": "s3_trigger",
+  "test_type": "file_not_found",
   "landing_bucket": "data-aggregator-landing-dev",
   "distribution_bucket": "data-aggregator-distribution-dev",
   "num_files": 5,
   "size_mb": 1,
   "concurrency": 5,
-  "timeout_seconds": 900,
+  "timeout_seconds": 120,
   "report_file": "results_10_file_not_found.xml"
 }

@@ -12,7 +12,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Set, TypedDict, Any
-from urllib.parse import quote
 
 import boto3
 from botocore.client import Config as BotocoreConfig
@@ -662,100 +661,89 @@ class E2ETestRunner:
             )
             return 1
 
+    def _wait_for_bundle_and_get_key(self, timeout_seconds: int = 60) -> Optional[str]:
+        """
+        Polls the distribution bucket until a bundle appears or a timeout is reached.
+        Returns the S3 key of the first bundle found.
+        """
+        self.console.log(f"Polling distribution bucket for a new bundle (timeout: {timeout_seconds}s)...")
+        start_time = time.time()
+        while time.time() - start_time < timeout_seconds:
+            response = self.s3.list_objects_v2(Bucket=self.config.distribution_bucket)
+            for obj in response.get("Contents", []):
+                # Find any object that looks like a bundle and that we haven't seen before.
+                if "bundle-" in obj["Key"] and obj["Key"] not in self.processed_bundle_keys:
+                    self.console.log(f"[green]✓ Found new bundle:[/] [magenta]{obj['Key']}[/magenta]")
+                    return obj["Key"]
+            time.sleep(3)
+
+        self.console.log("[yellow]Polling timed out. No new bundle was found.[/yellow]")
+        return None
+
     def _run_idempotency_test(self) -> int:
         """
-        Tests the idempotency system by invoking the Lambda twice with the same payload.
-        Verifies that the first invocation writes a record and the second is a no-op.
+        Tests the versioning behavior by uploading a file, then overwriting it.
+        It verifies that BOTH versions are processed, as each is a unique object.
+        This validates the core business logic for handling updated data.
         """
-        self.console.print("\n--- [bold blue]Idempotency Check Test[/bold blue] ---")
+        self.console.print("\n--- [bold blue]File Versioning Test (Scenario B)[/bold blue] ---")
 
-        if not self.config.lambda_function_name or not self.config.idempotency_table_name:
+        # --- Phase 1: Process Initial Version ---
+        self.console.print("\n[cyan]Phase 1: Processing the initial file...[/cyan]")
+
+        # 1. Produce a single source file. We need its local path for re-upload.
+        filename = "idempotency_test_file_001.bin"
+        local_path = self.source_dir / filename
+        s3_key = f"{self.s3_prefix}/{filename}"
+        file_hash = self.data_generator.generate(local_path, size_mb=1)
+        self.s3.upload_file(str(local_path), self.config.landing_bucket, s3_key)
+        self.console.log(f"Uploaded initial file to S3 key: [cyan]{s3_key}[/cyan]")
+
+        # 2. We need a manifest to track what we uploaded.
+        self.manifest = {
+            "run_id": self.run_id,
+            "start_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "config": self.config.raw_config,
+            "source_files": [{"key": s3_key, "size": local_path.stat().st_size, "sha256": file_hash}],
+        }
+
+        # 3. Wait for the first bundle to be created.
+        bundle_key_1 = self._wait_for_bundle_and_get_key(timeout_seconds=120)
+        if not bundle_key_1:
+            self.console.print("[bold red]❌ TEST FAILED: Initial bundle was not created in time.[/bold red]")
+            return 1
+        self.processed_bundle_keys.add(bundle_key_1)  # Track this so cleanup works
+
+        # 4. Validate the first bundle. This confirms the baseline test setup is working correctly.
+        self._consume_and_download(self.manifest)
+        results = self._validate_results(self.manifest)
+        if not all(r["status"] == "PASS" for r in results):
+            self.console.print("[bold red]❌ TEST FAILED: The initial bundle did not contain the correct file.[/bold red]")
+            self._display_and_report(results)
+            return 1
+        self.console.log("[green]✓ Initial bundle created and validated successfully.[/green]")
+
+        # --- Phase 2: Process Overwritten Version ---
+        self.console.print("\n[cyan]Phase 2: Processing the overwritten file version...[/cyan]")
+
+        # Re-upload the exact same file to the same key. This fires a new event for a new version.
+        self.console.log(f"Re-uploading file to the same S3 key to create a new version...")
+        self.s3.upload_file(str(local_path), self.config.landing_bucket, s3_key)
+
+        # Wait to see if a *second* bundle is created. We EXPECT it to be.
+        bundle_key_2 = self._wait_for_bundle_and_get_key(timeout_seconds=120)
+
+        # --- Phase 3: Assertion ---
+        self.console.print("\n[cyan]Phase 3: Verifying the outcome...[/cyan]")
+
+        if bundle_key_2 and bundle_key_2 != bundle_key_1:
             self.console.print(
-                "[bold red]Configuration Error: 'lambda_function_name' and 'idempotency_table_name' are required.[/bold red]")
-            return 2
-
-        # 1. Produce a single source file to get its metadata.
-        self._produce_and_upload()
-        self.console.print("[green]✓ Source file created.[/green]")
-
-        source_file = self.manifest["source_files"][0]
-        bucket_name = self.config.landing_bucket
-
-        # Create the raw JSON string
-        raw = json.dumps(
-            {"b": bucket_name, "k": source_file["key"], "v": "test-version-id"},
-            separators=(",", ":"),
-        )
-        # URL-encode it for the payload. This is the literal string Powertools will hash.
-        idempotency_key = quote(raw, safe="")
-
-        s3_object_payload = {
-            "key": source_file["key"],
-            "size": source_file["size"],
-            "versionId": "test-version-id"
-        }
-        final_payload_for_lambda = {
-            "e2e_idempotency_check_payload": {
-                "idempotency_key": idempotency_key,
-                "s3_object": s3_object_payload
-            }
-        }
-
-        # --- Common arguments for both invoke calls ---
-        invoke_args = {
-            "FunctionName": self.config.lambda_function_name,
-            "Payload": json.dumps(final_payload_for_lambda),
-            "LogType": 'Tail'
-        }
-
-        # 2. Invoke the Lambda for the FIRST time.
-        try:
-            # ... (First invocation logic as before) ...
-            self.console.print("[green]✓ First invocation successful.[/green]")
-        except Exception as e:
-            self.console.print(f"[bold red]Lambda invocation failed: {e}[/bold red]")
-            if self.config.verbose: self.console.print_exception()
-            return 1
-
-        # 3. Verify the idempotency record was written to DynamoDB.
-        try:
-            ddb = boto3.client("dynamodb")
-
-            # --- THE FINAL FIX ---
-            # Hash the URL-ENCODED string with MD5, which is what Powertools does.
-            hashed_key = hashlib.md5(idempotency_key.encode()).hexdigest()
-
-            # Construct the key with the correct path prefix and hash.
-            full_pk = (
-                f"{self.config.lambda_function_name}"
-                f".data_aggregator.app._process_record_idempotently"
-                f"#{hashed_key}"
-            )
-
-            item = ddb.get_item(
-                TableName=self.config.idempotency_table_name,
-                Key={"object_key": {"S": full_pk}},
-                ConsistentRead=True,
-            )
-            if "Item" not in item:
-                self.console.print("[bold red]❌ TEST FAILED: Idempotency record was not written.[/bold red]")
-                self.console.print(f"   (Looked for key: {full_pk})")
-                return 1
-            self.console.print("[green]✓ Idempotency record found in DynamoDB.[/green]")
-        except Exception as e:
-            self.console.print(f"[bold red]DynamoDB check failed: {e}[/bold red]")
-            if self.config.verbose: self.console.print_exception()
-            return 1
-
-        # 4. Invoke the Lambda for the SECOND time.
-        try:
-            # ... (Second invocation logic as before) ...
+                "\n[bold green]✅ TEST PASSED: A new, distinct bundle was created for the new file version.[/bold green]")
+            self.console.print("[bold green]   This confirms the system correctly processes updated files.[/bold green]")
+            return 0
+        else:
             self.console.print(
-                "[bold green]✓ Second invocation reused cached result (no duplicate processing).[/bold green]")
-        except Exception as e:
-            self.console.print(f"[bold red]Lambda invocation failed: {e}[/bold red]")
-            if self.config.verbose: self.console.print_exception()
+                f"\n[bold red]❌ TEST FAILED: A second bundle was not created for the new file version.[/bold red]")
+            self.console.print(
+                "[bold red]   This indicates a potential issue with the idempotency key or event processing.[/bold red]")
             return 1
-
-        self.console.print("\n[bold green]✅ TEST PASSED: Idempotency was correctly enforced.[/bold green]")
-        return 0

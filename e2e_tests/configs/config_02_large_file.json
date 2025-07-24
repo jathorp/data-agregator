@@ -1,5 +1,5 @@
 {
-  "description": "This test validates the SpooledTemporaryFile logic. A file size larger\nthan the 64 MiB spooling threshold is used to isolate the large-file handling\nmechanism.",
+  "description": "This test validates the SpooledTemporaryFile logic. A file size larger than the 64 MiB spooling threshold is used to isolate the large-file handling mechanism.",
   "landing_bucket": "data-aggregator-landing-dev",
   "distribution_bucket": "data-aggregator-distribution-dev",
   "num_files": 1,

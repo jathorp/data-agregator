@@ -1,5 +1,5 @@
 {
-  "description": "Tests the MAX_BUNDLE_ON_DISK_BYTES (400MB) guardrail. Sends 500MB of data\n(10x50MB files). Expects the lambda to process only the first 8 files and leave\nthe last 2, resulting in a test report with 8 PASS and 2 FAIL.",
+  "description": "Tests the MAX_BUNDLE_ON_DISK_BYTES (400MB) guardrail. Sends 500MB of data (10x50MB files). Expects the lambda to process only the first 8 files and leave the last 2, resulting in a test report with 8 PASS and 2 FAIL.",
   "generator_type": "random",
   "test_type": "direct_invoke",
   "lambda_function_name": "data-aggregator-processor-dev",

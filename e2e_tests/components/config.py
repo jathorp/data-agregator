@@ -16,7 +16,6 @@ class Config:
         "s3_trigger"  # 's3_trigger', 'direct_invoke', or 'idempotency_check'
     )
     lambda_function_name: Optional[str] = None
-    idempotency_table_name: Optional[str] = None  # Added for idempotency test
     num_files: int = 10
     size_mb: int = 1
     concurrency: int = 8

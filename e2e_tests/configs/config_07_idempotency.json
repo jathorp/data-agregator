@@ -4,7 +4,6 @@
   "lambda_function_name": "data-aggregator-processor-dev",
   "landing_bucket": "data-aggregator-landing-dev",
   "distribution_bucket": "data-aggregator-distribution-dev",
-  "idempotency_table_name": "data-aggregator-idempotency-dev",
   "num_files": 1,
   "size_mb": 1,
   "concurrency": 1,

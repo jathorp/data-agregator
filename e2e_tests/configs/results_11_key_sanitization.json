@@ -1,0 +1,10 @@
+{
+  "description": "Tests the security control for sanitizing malicious S3 keys. Uploads one file with a path traversal attempt and expects it to be skipped.",
+  "test_type": "s3_trigger",
+  "landing_bucket": "data-aggregator-landing-dev",
+  "distribution_bucket": "data-aggregator-distribution-dev",
+  "num_files": 1,
+  "size_mb": 1,
+  "concurrency": 1,
+  "report_file": "results_11_key_sanitization.xml"
+}

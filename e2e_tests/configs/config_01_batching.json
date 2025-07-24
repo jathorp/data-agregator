@@ -1,5 +1,5 @@
 {
-  "description": "This test validates the core batching logic. A large number of small files\nare used to check the batching mechanism specifically, without introducing\nmemory pressure.",
+  "description": "This test validates the core batching logic. A large number of small files are used to check the batching mechanism specifically, without introducing memory pressure.",
   "landing_bucket": "data-aggregator-landing-dev",
   "distribution_bucket": "data-aggregator-distribution-dev",
   "num_files": 50,

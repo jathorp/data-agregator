@@ -1,0 +1,11 @@
+{
+  "description": "Tests handling of a corrupted file where S3 metadata size mismatches the actual content. Expects the lambda to skip the single bad file and not crash.",
+  "test_type": "direct_invoke",
+  "lambda_function_name": "data-aggregator-processor-dev",
+  "landing_bucket": "data-aggregator-landing-dev",
+  "distribution_bucket": "data-aggregator-distribution-dev",
+  "num_files": 2,
+  "size_mb": 1,
+  "concurrency": 1,
+  "report_file": "results_09_corrupt_file.xml"
+}

@@ -180,28 +180,8 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
 
     # --- START OF TEST ROUTING LOGIC ---
 
-    # Path 1: Direct invocation for the idempotency check test.
-    if "e2e_idempotency_check_payload" in event:
-        if not is_test_env:
-            logger.error("Test-only idempotency payload received in production.")
-            raise ValueError("e2e_idempotency_check_payload not allowed in this environment")
-        logger.info("Direct invocation for idempotency check detected.")
-        payload_for_decorator = event["e2e_idempotency_check_payload"]
-
-        try:
-            _process_record_idempotently(data=payload_for_decorator)
-        except IdempotencyItemAlreadyExistsError:
-            # This is the correct, resilient way to handle this.
-            # We log a message that mirrors the main SQS path.
-            logger.info(
-                "Skipping duplicate S3 object.",
-                extra={"idempotency_key": payload_for_decorator.get("idempotency_key")}
-            )
-
-        return {"batchItemFailures": []}
-
-    # Path 2: Direct invocation for the bundling (e.g., disk limit) test.
-    elif event.get("e2e_test_direct_invoke"):
+    # Path1: Direct invocation for the bundling (e.g., disk limit) test.
+    if event.get("e2e_test_direct_invoke"):
         if not is_test_env:
             logger.error("Test-only bundling invoke received in production.")
             raise ValueError("e2e_test_direct_invoke not allowed in this environment")
@@ -210,7 +190,7 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
         _process_valid_records(records_to_process, {}, context)
         return {"batchItemFailures": []}
 
-    # --- Path 3: Default path for real SQS messages ---
+    # Path 2: Default path for real SQS messages ---
     else:
         # This block contains your complete, unchanged, and correct SQS processing logic.
         sqs_records: list[dict] = event.get("Records", [])
@@ -256,6 +236,8 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
                     idempotency_key = _make_idempotency_key(
                         bucket_name, s3_key, s3_version
                     )
+
+                    # The payload for idempotency should contain everything the key is based on
                     payload = {"idempotency_key": idempotency_key, "s3_object": s3_object}
                     _process_record_idempotently(data=payload)
 

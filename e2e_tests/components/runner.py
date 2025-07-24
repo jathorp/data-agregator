@@ -162,23 +162,27 @@ class E2ETestRunner:
 
             # Generate the file and store its details for the next phase
             file_hash = self.data_generator.generate(local_path, self.config.size_mb)
-            source_file_details.append({
-                "key": s3_key,
-                "size": local_path.stat().st_size,
-                "sha256": file_hash,
-                "local_path": str(local_path)
-            })
-        self.console.log(f"[green]✓[/green] All {self.config.num_files} local files generated.")
+            source_file_details.append(
+                {
+                    "key": s3_key,
+                    "size": local_path.stat().st_size,
+                    "sha256": file_hash,
+                    "local_path": str(local_path),
+                }
+            )
+        self.console.log(
+            f"[green]✓[/green] All {self.config.num_files} local files generated."
+        )
 
         # --- Phase B: Upload all generated files to S3 in parallel ---
         self.console.log("Phase B: Uploading all files to S3 in parallel...")
         with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TimeElapsedColumn(),
-                console=self.console,
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+            console=self.console,
         ) as progress:
             task = progress.add_task(
                 f"[cyan]Uploading {self.config.num_files} source files...",
@@ -191,7 +195,7 @@ class E2ETestRunner:
                         self.s3.upload_file,
                         detail["local_path"],
                         self.config.landing_bucket,
-                        detail["key"]
+                        detail["key"],
                     ): detail
                     for detail in source_file_details
                 }
@@ -201,7 +205,9 @@ class E2ETestRunner:
                         future.result()
                     except Exception as exc:
                         failed_detail = futures[future]
-                        self.console.log(f"[bold red]Error uploading {failed_detail['key']}: {exc}[/bold red]")
+                        self.console.log(
+                            f"[bold red]Error uploading {failed_detail['key']}: {exc}[/bold red]"
+                        )
                     progress.update(task, advance=1)
 
         # Build the manifest from the details we gathered in Phase A
@@ -288,6 +294,15 @@ class E2ETestRunner:
                         self.processed_bundle_keys.add(bundle_key)
 
                         with tarfile.open(local_bundle_path, "r:gz") as tar:
+                            # Get the list of members (files) in the tarball
+                            members = tar.getmembers()
+                            file_count = len(members)
+
+                            # Log the count before extracting
+                            progress.log(
+                                f"  [dim]Found {file_count} file(s) in bundle. Extracting...[/dim]"
+                            )
+
                             tar.extractall(path=self.extracted_dir, filter="data")
                         progress.log(
                             f"  [green]✓[/green] Successfully extracted [magenta]{bundle_key}[/magenta]."
@@ -711,13 +726,15 @@ class E2ETestRunner:
         Polls the distribution bucket until a new bundle appears or a timeout is reached.
         Returns the S3 key of the first new bundle found.
         """
-        self.console.print(f"[yellow]Polling for new bundle (timeout in {timeout_seconds}s)...[/yellow]")
+        self.console.print(
+            f"[yellow]Polling for new bundle (timeout in {timeout_seconds}s)...[/yellow]"
+        )
 
         with Progress(
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TimeElapsedColumn(),
-                console=self.console,
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TimeElapsedColumn(),
+            console=self.console,
         ) as progress:
             polling_task = progress.add_task(
                 "[yellow]Waiting...",
@@ -726,12 +743,23 @@ class E2ETestRunner:
 
             start_time = time.time()
             while time.time() - start_time < timeout_seconds:
-                response = self.s3.list_objects_v2(Bucket=self.config.distribution_bucket)
+                response = self.s3.list_objects_v2(
+                    Bucket=self.config.distribution_bucket
+                )
                 for obj in response.get("Contents", []):
                     # Find any object that looks like a bundle and that we haven't processed yet.
-                    if "bundle-" in obj["Key"] and obj["Key"] not in self.processed_bundle_keys:
-                        progress.update(polling_task, completed=timeout_seconds, description="[green]Found new bundle!")
-                        self.console.log(f"[green]✓ Found new bundle:[/] [magenta]{obj['Key']}[/magenta]")
+                    if (
+                        "bundle-" in obj["Key"]
+                        and obj["Key"] not in self.processed_bundle_keys
+                    ):
+                        progress.update(
+                            polling_task,
+                            completed=timeout_seconds,
+                            description="[green]Found new bundle!",
+                        )
+                        self.console.log(
+                            f"[green]✓ Found new bundle:[/] [magenta]{obj['Key']}[/magenta]"
+                        )
                         return obj["Key"]
 
                 # Update progress and sleep
@@ -747,7 +775,9 @@ class E2ETestRunner:
         It verifies that BOTH versions are processed, as each is a unique object.
         This validates the core business logic for handling updated data.
         """
-        self.console.print("\n--- [bold blue]File Versioning Test (Scenario B)[/bold blue] ---")
+        self.console.print(
+            "\n--- [bold blue]File Versioning Test (Scenario B)[/bold blue] ---"
+        )
 
         # --- Phase 1: Process Initial Version ---
         self.console.print("\n[cyan]Phase 1: Processing the initial file...[/cyan]")
@@ -765,13 +795,17 @@ class E2ETestRunner:
             "run_id": self.run_id,
             "start_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "config": self.config.raw_config,
-            "source_files": [{"key": s3_key, "size": local_path.stat().st_size, "sha256": file_hash}],
+            "source_files": [
+                {"key": s3_key, "size": local_path.stat().st_size, "sha256": file_hash}
+            ],
         }
 
         # 3. Wait for the first bundle to be created.
         bundle_key_1 = self._wait_for_bundle_and_get_key(timeout_seconds=120)
         if not bundle_key_1:
-            self.console.print("[bold red]❌ TEST FAILED: Initial bundle was not created in time.[/bold red]")
+            self.console.print(
+                "[bold red]❌ TEST FAILED: Initial bundle was not created in time.[/bold red]"
+            )
             return 1
         self.processed_bundle_keys.add(bundle_key_1)  # Track this so cleanup works
 
@@ -779,16 +813,24 @@ class E2ETestRunner:
         self._consume_and_download(self.manifest)
         results = self._validate_results(self.manifest)
         if not all(r["status"] == "PASS" for r in results):
-            self.console.print("[bold red]❌ TEST FAILED: The initial bundle did not contain the correct file.[/bold red]")
+            self.console.print(
+                "[bold red]❌ TEST FAILED: The initial bundle did not contain the correct file.[/bold red]"
+            )
             self._display_and_report(results)
             return 1
-        self.console.log("[green]✓ Initial bundle created and validated successfully.[/green]")
+        self.console.log(
+            "[green]✓ Initial bundle created and validated successfully.[/green]"
+        )
 
         # --- Phase 2: Process Overwritten Version ---
-        self.console.print("\n[cyan]Phase 2: Processing the overwritten file version...[/cyan]")
+        self.console.print(
+            "\n[cyan]Phase 2: Processing the overwritten file version...[/cyan]"
+        )
 
         # Re-upload the exact same file to the same key. This fires a new event for a new version.
-        self.console.log(f"Re-uploading file to the same S3 key to create a new version...")
+        self.console.log(
+            f"Re-uploading file to the same S3 key to create a new version..."
+        )
         self.s3.upload_file(str(local_path), self.config.landing_bucket, s3_key)
 
         # Wait to see if a *second* bundle is created. We EXPECT it to be.
@@ -799,14 +841,19 @@ class E2ETestRunner:
 
         if bundle_key_2 and bundle_key_2 != bundle_key_1:
             self.console.print(
-                "\n[bold green]✅ TEST PASSED: A new, distinct bundle was created for the new file version.[/bold green]")
-            self.console.print("[bold green]   This confirms the system correctly processes updated files.[/bold green]")
+                "\n[bold green]✅ TEST PASSED: A new, distinct bundle was created for the new file version.[/bold green]"
+            )
+            self.console.print(
+                "[bold green]   This confirms the system correctly processes updated files.[/bold green]"
+            )
             return 0
         else:
             self.console.print(
-                f"\n[bold red]❌ TEST FAILED: A second bundle was not created for the new file version.[/bold red]")
+                f"\n[bold red]❌ TEST FAILED: A second bundle was not created for the new file version.[/bold red]"
+            )
             self.console.print(
-                "[bold red]   This indicates a potential issue with the idempotency key or event processing.[/bold red]")
+                "[bold red]   This indicates a potential issue with the idempotency key or event processing.[/bold red]"
+            )
             return 1
 
     def _run_key_sanitization_test(self) -> int:
@@ -815,7 +862,9 @@ class E2ETestRunner:
         key and verifies that the Lambda's sanitization function correctly
         transforms it into a safe path before adding it to the bundle.
         """
-        self.console.print("\n--- [bold blue]Key Sanitization Test (S3 Trigger)[/bold blue] ---")
+        self.console.print(
+            "\n--- [bold blue]Key Sanitization Test (S3 Trigger)[/bold blue] ---"
+        )
 
         # 1. Define the keys as they will be uploaded to S3.
         input_safe_key = f"{self.s3_prefix}/safe_file.txt"
@@ -830,7 +879,10 @@ class E2ETestRunner:
         # 3. Create and upload the files using the literal input keys.
         files_to_upload = {
             "safe": {"upload_key": input_safe_key, "local_name": "safe_file.txt"},
-            "malicious": {"upload_key": input_malicious_key, "local_name": "malicious_file.txt"},
+            "malicious": {
+                "upload_key": input_malicious_key,
+                "local_name": "malicious_file.txt",
+            },
         }
 
         # Store hashes mapped to their EXPECTED output key
@@ -838,13 +890,23 @@ class E2ETestRunner:
         for file_type, file_info in files_to_upload.items():
             local_path = self.source_dir / file_info["local_name"]
             file_hash = self.data_generator.generate(local_path, size_mb=1)
-            self.s3.upload_file(str(local_path), self.config.landing_bucket, file_info["upload_key"])
-            self.console.log(f"Uploaded test file to S3 key: [cyan]{file_info['upload_key']}[/cyan]")
+            self.s3.upload_file(
+                str(local_path), self.config.landing_bucket, file_info["upload_key"]
+            )
+            self.console.log(
+                f"Uploaded test file to S3 key: [cyan]{file_info['upload_key']}[/cyan]"
+            )
 
             if file_type == "safe":
-                hashes_by_expected_key[expected_output_safe_key] = (local_path.stat().st_size, file_hash)
+                hashes_by_expected_key[expected_output_safe_key] = (
+                    local_path.stat().st_size,
+                    file_hash,
+                )
             else:
-                hashes_by_expected_key[expected_output_malicious_key] = (local_path.stat().st_size, file_hash)
+                hashes_by_expected_key[expected_output_malicious_key] = (
+                    local_path.stat().st_size,
+                    file_hash,
+                )
 
         # 4. Create the manifest with the keys we EXPECT to find in the bundle.
         manifest_records = [
@@ -859,7 +921,8 @@ class E2ETestRunner:
         }
 
         self.console.log(
-            f"Manifest created. Expecting to find keys in bundle: {[r['key'] for r in self.manifest['source_files']]}")
+            f"Manifest created. Expecting to find keys in bundle: {[r['key'] for r in self.manifest['source_files']]}"
+        )
 
         # 5. Run the standard consumer and validator.
         self._consume_and_download(self.manifest)
@@ -869,12 +932,14 @@ class E2ETestRunner:
         # 6. Success is now simple: ALL files in our corrected manifest must pass validation.
         if all(r["status"] == "PASS" for r in results):
             self.console.print(
-                "\n[bold green]✅ TEST PASSED: The key was correctly sanitized and all files were processed.[/bold green]")
+                "\n[bold green]✅ TEST PASSED: The key was correctly sanitized and all files were processed.[/bold green]"
+            )
             return 0
         else:
-            self.console.print("\n[bold red]❌ TEST FAILED: Validation failed against the sanitized keys.[/bold red]")
+            self.console.print(
+                "\n[bold red]❌ TEST FAILED: Validation failed against the sanitized keys.[/bold red]"
+            )
             return 1
-
 
     def _run_file_not_found_test(self) -> int:
         """
@@ -882,26 +947,37 @@ class E2ETestRunner:
         a batch of files, deletes one, and expects the final bundle to contain
         only the remaining files.
         """
-        self.console.print("\n--- [bold blue]File Not Found Resilience Test[/bold blue] ---")
+        self.console.print(
+            "\n--- [bold blue]File Not Found Resilience Test[/bold blue] ---"
+        )
 
         # 1. Use the standard producer to upload the initial batch of files.
         #    This gives us a manifest of all files that were created.
         initial_manifest = self._produce_and_upload()
         self.console.print(
-            f"[green]✓ Producer finished.[/green] {len(initial_manifest['source_files'])} source files uploaded.")
+            f"[green]✓ Producer finished.[/green] {len(initial_manifest['source_files'])} source files uploaded."
+        )
 
         if not initial_manifest["source_files"]:
-            self.console.print("[bold red]Error: No source files were produced for the test.[/bold red]")
+            self.console.print(
+                "[bold red]Error: No source files were produced for the test.[/bold red]"
+            )
             return 1
 
         # 2. Select one file to delete. Let's pick the last one for simplicity.
         file_to_delete = initial_manifest["source_files"][-1]
-        self.console.log(f"Deleting one object to simulate race condition: [cyan]{file_to_delete['key']}[/cyan]")
+        self.console.log(
+            f"Deleting one object to simulate race condition: [cyan]{file_to_delete['key']}[/cyan]"
+        )
 
         try:
-            self.s3.delete_object(Bucket=self.config.landing_bucket, Key=file_to_delete['key'])
+            self.s3.delete_object(
+                Bucket=self.config.landing_bucket, Key=file_to_delete["key"]
+            )
         except Exception as e:
-            self.console.print(f"[bold red]Failed to delete object from S3: {e}[/bold red]")
+            self.console.print(
+                f"[bold red]Failed to delete object from S3: {e}[/bold red]"
+            )
             return 1
 
         # 3. CRITICAL: Create the final manifest that the validator will use.
@@ -915,7 +991,8 @@ class E2ETestRunner:
         }
 
         self.console.log(
-            f"Manifest updated. Expecting to find {len(self.manifest['source_files'])} files in the final bundle.")
+            f"Manifest updated. Expecting to find {len(self.manifest['source_files'])} files in the final bundle."
+        )
 
         # 4. Run the standard consumer and validator against the *expected* manifest.
         self._consume_and_download(self.manifest)
@@ -925,11 +1002,13 @@ class E2ETestRunner:
         # 5. The success condition is that all *expected* files passed validation.
         if all(r["status"] == "PASS" for r in results):
             self.console.print(
-                "\n[bold green]✅ TEST PASSED: The pipeline correctly skipped the deleted file and processed the rest.[/bold green]")
+                "\n[bold green]✅ TEST PASSED: The pipeline correctly skipped the deleted file and processed the rest.[/bold green]"
+            )
             return 0
         else:
             self.console.print(
-                "\n[bold red]❌ TEST FAILED: Validation failed. The bundle did not contain the correct set of files.[/bold red]")
+                "\n[bold red]❌ TEST FAILED: Validation failed. The bundle did not contain the correct set of files.[/bold red]"
+            )
             return 1
 
     def _run_partial_batch_failure_test(self) -> int:
@@ -939,20 +1018,28 @@ class E2ETestRunner:
         returned to SQS. It then waits to confirm that a subsequent Lambda
         invocation processes the retried messages.
         """
-        self.console.print("\n--- [bold blue]Partial Batch Failure & SQS Retry Test[/bold blue] ---")
+        self.console.print(
+            "\n--- [bold blue]Partial Batch Failure & SQS Retry Test[/bold blue] ---"
+        )
 
         # 1. Produce all files and create the full manifest of what we expect
         #    to find at the end of the entire process.
         self.manifest = self._produce_and_upload()
-        self.console.print(f"[green]✓ Producer finished.[/green] All {self.config.num_files} source files uploaded.")
+        self.console.print(
+            f"[green]✓ Producer finished.[/green] All {self.config.num_files} source files uploaded."
+        )
 
         # 2. The existing consumer is perfect for this. It will poll, find the first
         #    partial bundle, continue polling, and then find the second bundle
         #    created from the retried messages. It only stops when all files from
         #    the manifest have been found and extracted.
-        self.console.log("Consumer starting. Expecting multiple bundles due to partial failure handling...")
+        self.console.log(
+            "Consumer starting. Expecting multiple bundles due to partial failure handling..."
+        )
         self._consume_and_download(self.manifest)
-        self.console.print("[green]✓ Consumer finished.[/green] All expected files found across all bundles.")
+        self.console.print(
+            "[green]✓ Consumer finished.[/green] All expected files found across all bundles."
+        )
 
         # 3. Validate the final state of the extracted directory against the original, full manifest.
         results = self._validate_results(self.manifest)
@@ -960,8 +1047,12 @@ class E2ETestRunner:
 
         # 4. The success condition is that everything was eventually processed correctly.
         if all(r["status"] == "PASS" for r in results):
-            self.console.print("\n[bold green]✅ TEST PASSED: The pipeline correctly processed an initial partial batch and then successfully processed the retried messages.[/bold green]")
+            self.console.print(
+                "\n[bold green]✅ TEST PASSED: The pipeline correctly processed an initial partial batch and then successfully processed the retried messages.[/bold green]"
+            )
             return 0
         else:
-            self.console.print("\n[bold red]❌ TEST FAILED: The final set of extracted files did not match the initial manifest.[/bold red]")
+            self.console.print(
+                "\n[bold red]❌ TEST FAILED: The final set of extracted files did not match the initial manifest.[/bold red]"
+            )
             return 1

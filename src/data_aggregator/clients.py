@@ -52,7 +52,7 @@ class S3Client:
             return cast(BinaryIO, response["Body"])
         except ClientError as e:
             # Check if the specific error code is 'NoSuchKey'.
-            if e.response['Error']['Code'] == 'NoSuchKey':
+            if e.response["Error"]["Code"] == "NoSuchKey":
                 # Raise our clean, application-specific exception.
                 raise ObjectNotFoundError(
                     f"S3 object not found at bucket='{bucket}', key='{key}'"

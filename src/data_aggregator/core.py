@@ -116,7 +116,7 @@ class HashingFileWrapper(io.BufferedIOBase):
 # --- Core Bundling Routine ---
 @contextmanager
 def create_tar_gz_bundle_stream(
-        s3_client: S3Client, records: List[S3EventRecord], context: LambdaContext
+    s3_client: S3Client, records: List[S3EventRecord], context: LambdaContext
 ) -> Iterator[Tuple[BinaryIO, str, List[S3EventRecord]]]:
     """
     Stream-creates a compressed tarball from S3 objects, stopping gracefully
@@ -134,9 +134,9 @@ def create_tar_gz_bundle_stream(
 
     try:
         with tarfile.open(
-                mode="w:gz",
-                fileobj=cast(BinaryIO, hashing_writer),
-                format=tarfile.PAX_FORMAT,
+            mode="w:gz",
+            fileobj=cast(BinaryIO, hashing_writer),
+            format=tarfile.PAX_FORMAT,
         ) as tar:
             logger.debug(f"Starting to process a batch of {len(records)} records.")
 
@@ -144,7 +144,10 @@ def create_tar_gz_bundle_stream(
                 # --- START OF THE TRY BLOCK FOR A SINGLE RECORD ---
                 try:
                     # 1. Gracefully stop if nearing timeout
-                    if context.get_remaining_time_in_millis() < TIMEOUT_GUARD_THRESHOLD_MS:
+                    if (
+                        context.get_remaining_time_in_millis()
+                        < TIMEOUT_GUARD_THRESHOLD_MS
+                    ):
                         logger.warning("Timeout threshold reached. Finalizing bundle.")
                         break
 
@@ -160,7 +163,9 @@ def create_tar_gz_bundle_stream(
                     original_key = record["s3"]["object"]["key"]
                     safe_key = _sanitize_s3_key(original_key)
                     if safe_key is None:
-                        logger.warning("Skipping invalid S3 key.", extra={"key": original_key})
+                        logger.warning(
+                            "Skipping invalid S3 key.", extra={"key": original_key}
+                        )
                         continue
 
                     bucket = record["s3"]["bucket"]["name"]
@@ -175,14 +180,15 @@ def create_tar_gz_bundle_stream(
                         if buffered is None:
                             logger.warning(
                                 "Size mismatch between S3 metadata and actual object. Skipping.",
-                                extra={"key": original_key}
+                                extra={"key": original_key},
                             )
                             continue
                         fileobj_for_tarball, actual_size = buffered
                     else:
                         # Large file: stream directly to conserve disk space
                         logger.debug(
-                            "Streaming large file directly to tarball.", extra={"key": original_key}
+                            "Streaming large file directly to tarball.",
+                            extra={"key": original_key},
                         )
                         fileobj_for_tarball = s3_client.get_file_content_stream(
                             bucket, original_key
@@ -216,7 +222,9 @@ def create_tar_gz_bundle_stream(
                 except Exception:
                     # This is a generic catch-all for any other unexpected error
                     # that occurs while processing a single file.
-                    key_for_logging = record.get("s3", {}).get("object", {}).get("key", "unknown")
+                    key_for_logging = (
+                        record.get("s3", {}).get("object", {}).get("key", "unknown")
+                    )
                     logger.exception(
                         "An unexpected error occurred when adding a file to the tarball. Skipping.",
                         extra={"key": key_for_logging},

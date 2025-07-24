@@ -13,6 +13,7 @@ responsible for:
     upload the final Gzip bundle.
 6.  Implementing robust partial batch failure handling.
 """
+
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -72,6 +73,7 @@ idempotency_config = IdempotencyConfig(
 # Set the primary key name for the persistence layer that the idempotency utility will use.
 idempotency_persistence_layer.configure(config=idempotency_config)
 
+
 # ───────────────────────────────────────────────────────────────
 # Helper: collision‑proof idempotency key
 # ───────────────────────────────────────────────────────────────
@@ -92,7 +94,7 @@ def _make_idempotency_key(bucket: str, key: str, version: str | None) -> str:
 )
 def _process_record_idempotently(*, data: dict[str, Any]) -> bool:
     hashed = hashlib.sha256(data["idempotency_key"].encode()).hexdigest()
-    logger.info("DEBUG: hashed_key=%s", hashed)   # remove after verifying
+    logger.info("DEBUG: hashed_key=%s", hashed)  # remove after verifying
 
     """Wraps the idempotency check. If it runs, the item is not a duplicate."""
     logger.debug("Idempotency check passed for new item.", extra=data)
@@ -198,7 +200,6 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
             logger.warning("Event did not contain any SQS records. Exiting gracefully.")
             return {"batchItemFailures": []}
 
-
         # --- Setup tracking variables ---
         records_to_process: list[S3EventRecord] = []
         failed_message_ids: set[str] = set()
@@ -226,7 +227,9 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
                     s3_object = s3_record["s3"]["object"]
                     s3_key = s3_object["key"]
                     s3_version = s3_object.get("versionId")
-                    unique_record_key = f"{s3_key}#{s3_version}" if s3_version else s3_key
+                    unique_record_key = (
+                        f"{s3_key}#{s3_version}" if s3_version else s3_key
+                    )
 
                     record_to_message_id_map.setdefault(unique_record_key, set()).add(
                         message_id
@@ -238,7 +241,10 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
                     )
 
                     # The payload for idempotency should contain everything the key is based on
-                    payload = {"idempotency_key": idempotency_key, "s3_object": s3_object}
+                    payload = {
+                        "idempotency_key": idempotency_key,
+                        "s3_object": s3_object,
+                    }
                     _process_record_idempotently(data=payload)
 
                     records_to_process.append(s3_record)
@@ -253,13 +259,16 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
                     )
                 except Exception:
                     logger.exception(
-                        "Failed to process an S3 record.", extra={"messageId": message_id}
+                        "Failed to process an S3 record.",
+                        extra={"messageId": message_id},
                     )
                     failed_message_ids.add(message_id)
 
         # --- 2. If no new valid records, exit now ---
         if not records_to_process:
-            logger.info("No new records to process after filtering duplicates and errors.")
+            logger.info(
+                "No new records to process after filtering duplicates and errors."
+            )
             return build_partial_failure_response(failed_message_ids)
 
         # --- 3. Process the valid batch ---

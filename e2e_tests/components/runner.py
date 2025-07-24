@@ -144,44 +144,82 @@ class E2ETestRunner:
         }
 
     def _produce_and_upload(self) -> TestManifest:
-        """Generates and uploads source files in parallel, creating a manifest."""
+        """
+        Generates and uploads source files, creating a manifest. This method uses a
+        two-phase approach (generate locally, then upload in parallel) to ensure
+        S3 events are fired in a tight window, increasing the likelihood of
+        them being processed in a single SQS batch.
+        """
         self.console.print("\n--- [bold green]Producer Phase[/bold green] ---")
+
+        # --- Phase A: Generate all files locally first ---
+        self.console.log("Phase A: Generating source files locally...")
+        source_file_details = []
+        for i in range(self.config.num_files):
+            filename = f"source_file_{i + 1:04d}.bin"
+            local_path = self.source_dir / filename
+            s3_key = f"{self.s3_prefix}/{filename}"
+
+            # Generate the file and store its details for the next phase
+            file_hash = self.data_generator.generate(local_path, self.config.size_mb)
+            source_file_details.append({
+                "key": s3_key,
+                "size": local_path.stat().st_size,
+                "sha256": file_hash,
+                "local_path": str(local_path)
+            })
+        self.console.log(f"[green]✓[/green] All {self.config.num_files} local files generated.")
+
+        # --- Phase B: Upload all generated files to S3 in parallel ---
+        self.console.log("Phase B: Uploading all files to S3 in parallel...")
+        with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeElapsedColumn(),
+                console=self.console,
+        ) as progress:
+            task = progress.add_task(
+                f"[cyan]Uploading {self.config.num_files} source files...",
+                total=self.config.num_files,
+            )
+            with ThreadPoolExecutor(max_workers=self.config.concurrency) as executor:
+                # The worker function is now just the S3 upload call
+                futures = {
+                    executor.submit(
+                        self.s3.upload_file,
+                        detail["local_path"],
+                        self.config.landing_bucket,
+                        detail["key"]
+                    ): detail
+                    for detail in source_file_details
+                }
+                for future in as_completed(futures):
+                    # Exception handling in case an upload fails
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        failed_detail = futures[future]
+                        self.console.log(f"[bold red]Error uploading {failed_detail['key']}: {exc}[/bold red]")
+                    progress.update(task, advance=1)
+
+        # Build the manifest from the details we gathered in Phase A
+        manifest_files = [
+            {"key": d["key"], "size": d["size"], "sha256": d["sha256"]}
+            for d in source_file_details
+        ]
         manifest: TestManifest = {
             "run_id": self.run_id,
             "start_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "config": self.config.raw_config,
-            "source_files": [],
+            "source_files": sorted(manifest_files, key=lambda x: x["key"]),
         }
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeElapsedColumn(),
-            console=self.console,
-        ) as progress:
-            task = progress.add_task(
-                f"[cyan]Producing {self.config.num_files} source files...",
-                total=self.config.num_files,
-            )
-            with ThreadPoolExecutor(max_workers=self.config.concurrency) as executor:
-                futures = {
-                    executor.submit(self._produce_one_file, i): i
-                    for i in range(self.config.num_files)
-                }
-                for future in as_completed(futures):
-                    manifest["source_files"].append(future.result())
-                    progress.update(task, advance=1)
-
-        # Sort files by key for deterministic manifest
-        manifest["source_files"].sort(key=lambda x: x["key"])
 
         with open(self.local_workspace / MANIFEST_FILENAME, "w") as f:
             json.dump(manifest, f, indent=2)
 
         self.manifest = manifest
-
         return self.manifest
 
     def _consume_and_download(self, manifest: TestManifest):

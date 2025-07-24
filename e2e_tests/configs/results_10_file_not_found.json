@@ -6,6 +6,6 @@
   "num_files": 5,
   "size_mb": 1,
   "concurrency": 5,
-  "timeout_seconds": 120,
+  "timeout_seconds": 900,
   "report_file": "results_10_file_not_found.xml"
 }

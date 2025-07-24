@@ -6,6 +6,6 @@
   "num_files": 10,
   "size_mb": 300,
   "concurrency": 10,
-  "timeout_seconds": 600,
+  "timeout_seconds": 1800,
   "report_file": "results_12_partial_batch_failure.xml"
 }

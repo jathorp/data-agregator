@@ -114,7 +114,7 @@ resource "aws_lambda_function" "aggregator" {
   handler       = "data_aggregator.app.handler"
   runtime       = var.lambda_runtime
 
-  reserved_concurrent_executions = 4
+  reserved_concurrent_executions = 10
   architectures                  = ["arm64"]
   timeout                        = var.lambda_timeout
   memory_size                    = var.lambda_memory_size

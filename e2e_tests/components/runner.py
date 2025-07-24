@@ -498,6 +498,8 @@ class E2ETestRunner:
                 return self._run_direct_invoke_test()
             elif self.config.test_type == "idempotency_check":
                 return self._run_idempotency_test()
+            elif self.config.test_type == "key_sanitization":
+                return self._run_key_sanitization_test()
 
             self.manifest = self._produce_and_upload()
             self.console.print(
@@ -763,3 +765,63 @@ class E2ETestRunner:
             self.console.print(
                 "[bold red]   This indicates a potential issue with the idempotency key or event processing.[/bold red]")
             return 1
+
+    def _run_key_sanitization_test(self) -> int:
+        """
+        Tests the S3 key sanitization logic by uploading one valid file and one
+        file with a path-traversal key. Expects only the valid file to be processed.
+        """
+        self.console.print("\n--- [bold blue]Key Sanitization Test[/bold blue] ---")
+
+        # 1. Manually define our files. We are not using the generic producer.
+        safe_key = f"{self.s3_prefix}/safe_file.txt"
+        malicious_key = f"{self.s3_prefix}/../../malicious_file.txt"
+
+        source_files_to_create = {
+            "safe": {"key": safe_key, "local_name": "safe_file.txt"},
+            "malicious": {"key": malicious_key, "local_name": "malicious_file.txt"},
+        }
+
+        # 2. Create and upload these specific files.
+        manifest_records = []
+        for file_info in source_files_to_create.values():
+            local_path = self.source_dir / file_info["local_name"]
+            file_hash = self.data_generator.generate(local_path, size_mb=1)
+            self.s3.upload_file(str(local_path), self.config.landing_bucket, file_info["key"])
+            self.console.log(f"Uploaded test file to S3 key: [cyan]{file_info['key']}[/cyan]")
+            manifest_records.append({
+                "key": file_info["key"],
+                "size": local_path.stat().st_size,
+                "sha256": file_hash
+            })
+
+        # 3. Create the manifest. It MUST list both files.
+        self.manifest = {
+            "run_id": self.run_id,
+            "start_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "config": self.config.raw_config,
+            "source_files": sorted(manifest_records, key=lambda x: x["key"]),
+        }
+
+        # 4. Now, use the standard consumer and validator.
+        # The consumer will find a bundle with only one file.
+        self._consume_and_download(self.manifest)
+        # The validator will compare the 1-file bundle against the 2-file manifest.
+        results = self._validate_results(self.manifest)
+        self._display_and_report(results)
+
+        # 5. Define the success condition for this *negative test case*.
+        # We expect ONE PASS (the safe file) and ONE FAIL (the malicious file).
+        passing_results = [r for r in results if r["status"] == "PASS"]
+        failing_results = [r for r in results if r["status"] == "FAIL"]
+
+        if len(passing_results) == 1 and len(failing_results) == 1:
+            # Check that the failed item is the one we expect.
+            if malicious_key in failing_results[0]["key"]:
+                self.console.print(
+                    "\n[bold green]✅ TEST PASSED: The malicious key was correctly rejected by the pipeline.[/bold green]")
+                return 0  # Success!
+
+        self.console.print(
+            "\n[bold red]❌ TEST FAILED: The system did not correctly isolate the malicious file.[/bold red]")
+        return 1

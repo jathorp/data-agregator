@@ -1,11 +1,8 @@
 {
-  "description": "Tests the security control for sanitizing malicious S3 keys. Uploads one file with a path traversal attempt and expects it to be skipped.",
-  "test_type": "s3_trigger",
+  "description": "Tests the security control for sanitizing malicious S3 keys. Uploads one valid file and one with a path traversal attempt, expecting the malicious file to be skipped.",
+  "test_type": "key_sanitization",
   "landing_bucket": "data-aggregator-landing-dev",
   "distribution_bucket": "data-aggregator-distribution-dev",
-  "num_files": 1,
-  "size_mb": 1,
-  "concurrency": 1,
-  "timeout_seconds": 900,
+  "timeout_seconds": 240,
   "report_file": "results_11_key_sanitization.xml"
 }

@@ -1,0 +1,11 @@
+{
+  "description": "Tests SQS partial batch failure. Uploads 500MB of data (5x100MB files) to exceed the 400MB bundle limit. Expects the first 4 files to be processed in one invocation, and the 5th to be retried and processed in a second invocation.",
+  "test_type": "partial_batch_failure",
+  "landing_bucket": "data-aggregator-landing-dev",
+  "distribution_bucket": "data-aggregator-distribution-dev",
+  "num_files": 5,
+  "size_mb": 100,
+  "concurrency": 5,
+  "timeout_seconds": 300,
+  "report_file": "results_12_partial_batch_failure.xml"
+}

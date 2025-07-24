@@ -503,6 +503,8 @@ class E2ETestRunner:
                 return self._run_key_sanitization_test()
             elif self.config.test_type == "file_not_found":
                 return self._run_file_not_found_test()
+            elif self.config.test_type == "partial_batch_failure":
+                return self._run_partial_batch_failure_test()
 
             self.manifest = self._produce_and_upload()
             self.console.print(
@@ -892,3 +894,36 @@ class E2ETestRunner:
                 "\n[bold red]❌ TEST FAILED: Validation failed. The bundle did not contain the correct set of files.[/bold red]")
             return 1
 
+    def _run_partial_batch_failure_test(self) -> int:
+        """
+        Tests the SQS partial batch failure mechanism. It uploads a batch of files
+        that exceeds the Lambda's processing limit, forcing some messages to be
+        returned to SQS. It then waits to confirm that a subsequent Lambda
+        invocation processes the retried messages.
+        """
+        self.console.print("\n--- [bold blue]Partial Batch Failure & SQS Retry Test[/bold blue] ---")
+
+        # 1. Produce all files and create the full manifest of what we expect
+        #    to find at the end of the entire process.
+        self.manifest = self._produce_and_upload()
+        self.console.print(f"[green]✓ Producer finished.[/green] All {self.config.num_files} source files uploaded.")
+
+        # 2. The existing consumer is perfect for this. It will poll, find the first
+        #    partial bundle, continue polling, and then find the second bundle
+        #    created from the retried messages. It only stops when all files from
+        #    the manifest have been found and extracted.
+        self.console.log("Consumer starting. Expecting multiple bundles due to partial failure handling...")
+        self._consume_and_download(self.manifest)
+        self.console.print("[green]✓ Consumer finished.[/green] All expected files found across all bundles.")
+
+        # 3. Validate the final state of the extracted directory against the original, full manifest.
+        results = self._validate_results(self.manifest)
+        self._display_and_report(results)
+
+        # 4. The success condition is that everything was eventually processed correctly.
+        if all(r["status"] == "PASS" for r in results):
+            self.console.print("\n[bold green]✅ TEST PASSED: The pipeline correctly processed an initial partial batch and then successfully processed the retried messages.[/bold green]")
+            return 0
+        else:
+            self.console.print("\n[bold red]❌ TEST FAILED: The final set of extracted files did not match the initial manifest.[/bold red]")
+            return 1

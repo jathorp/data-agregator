@@ -9,12 +9,11 @@ incorporate best practices like typed interfaces and efficient API usage.
 """
 
 import logging
-from typing import BinaryIO, TYPE_CHECKING, Optional, cast
+from typing import BinaryIO, TYPE_CHECKING, cast
 
 from botocore.exceptions import ClientError, EndpointConnectionError, ReadTimeoutError
 
 from .exceptions import (
-    ObjectNotFoundError,
     S3AccessDeniedError,
     S3ObjectNotFoundError,
     S3ThrottlingError,
@@ -33,7 +32,7 @@ class S3Client:
     A wrapper for S3 client operations, focused on streaming data and security.
     """
 
-    def __init__(self, s3_client: "S3ClientType", kms_key_id: Optional[str] = None):
+    def __init__(self, s3_client: "S3ClientType", kms_key_id: str | None = None):
         """
         Initializes the S3Client.
 
@@ -120,7 +119,7 @@ class S3Client:
                 ) from e
         except ReadTimeoutError as e:
             raise S3TimeoutError(
-                f"S3 read timeout while retrieving object",
+                "S3 read timeout while retrieving object",
                 error_code="S3_READ_TIMEOUT",
                 context={
                     "bucket": bucket,
@@ -130,7 +129,7 @@ class S3Client:
             ) from e
         except EndpointConnectionError as e:
             raise S3TimeoutError(
-                f"S3 endpoint connection error",
+                "S3 endpoint connection error",
                 error_code="S3_CONNECTION_ERROR",
                 context={
                     "bucket": bucket,
@@ -222,7 +221,7 @@ class S3Client:
                 ) from e
         except ReadTimeoutError as e:
             raise S3TimeoutError(
-                f"S3 upload read timeout",
+                "S3 upload read timeout",
                 error_code="S3_UPLOAD_READ_TIMEOUT",
                 context={
                     "bucket": bucket,
@@ -233,7 +232,7 @@ class S3Client:
             ) from e
         except EndpointConnectionError as e:
             raise S3TimeoutError(
-                f"S3 upload connection error",
+                "S3 upload connection error",
                 error_code="S3_UPLOAD_CONNECTION_ERROR",
                 context={
                     "bucket": bucket,

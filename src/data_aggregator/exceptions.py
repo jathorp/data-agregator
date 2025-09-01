@@ -26,7 +26,7 @@ Exception Hierarchy:
     - ConfigurationError
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class DataAggregatorError(Exception):
@@ -35,9 +35,9 @@ class DataAggregatorError(Exception):
     def __init__(
         self, 
         message: str, 
-        error_code: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None,
-        correlation_id: Optional[str] = None
+        error_code: str | None = None,
+        context: dict[str, Any] | None = None,
+        correlation_id: str | None = None
     ):
         super().__init__(message)
         self.message = message
@@ -45,7 +45,7 @@ class DataAggregatorError(Exception):
         self.context = dict(context) if context else {}  # Copy context to prevent mutation
         self.correlation_id = correlation_id
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert exception to dictionary for structured logging."""
         return {
             "error_type": self.__class__.__name__,
@@ -238,7 +238,7 @@ def is_retryable_error(error: Exception) -> bool:
     return isinstance(error, RetryableError)
 
 
-def get_error_context(error: Exception) -> Dict[str, Any]:
+def get_error_context(error: Exception) -> dict[str, Any]:
     """Extract error context for logging."""
     if isinstance(error, DataAggregatorError):
         return error.to_dict()

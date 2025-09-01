@@ -19,7 +19,7 @@ import re
 import tarfile
 from contextlib import closing, contextmanager
 from tempfile import SpooledTemporaryFile
-from typing import BinaryIO, Iterator, List, Optional, Tuple, cast
+from typing import BinaryIO, Iterator, cast
 
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
@@ -75,7 +75,7 @@ def _buffer_and_validate(
     stream: BinaryIO,
     expected_size: int,
     spool_threshold: int,
-) -> Optional[Tuple[BinaryIO, int]]:
+) -> tuple[BinaryIO, int] | None:
     """
     Read *stream* into a SpooledTemporaryFile (in-RAM up to *spool_threshold*,
     then /tmp on disk) while counting bytes.
@@ -135,8 +135,8 @@ class HashingFileWrapper(io.BufferedIOBase):
 # --- Core Bundling Routine ---
 @contextmanager
 def create_tar_gz_bundle_stream(
-    s3_client: S3Client, records: List[S3EventRecord], context: LambdaContext, config: AppConfig
-) -> Iterator[Tuple[BinaryIO, str, List[S3EventRecord]]]:
+    s3_client: S3Client, records: list[S3EventRecord], context: LambdaContext, config: AppConfig
+) -> Iterator[tuple[BinaryIO, str, list[S3EventRecord]]]:
     """
     Stream-creates a compressed tarball from S3 objects, stopping gracefully
     on timeout or disk space constraints. Catches errors for individual files.
@@ -148,7 +148,7 @@ def create_tar_gz_bundle_stream(
         max_size=config.spool_file_max_size_bytes, mode="w+b"
     )
     hashing_writer = HashingFileWrapper(output_spool_file)
-    processed_records: List[S3EventRecord] = []
+    processed_records: list[S3EventRecord] = []
     bytes_written = 0
 
     try:
@@ -354,13 +354,13 @@ def create_tar_gz_bundle_stream(
 
 # --- High-Level Orchestrator ---
 def process_and_stage_batch(
-    records: List[S3EventRecord],
+    records: list[S3EventRecord],
     s3_client: S3Client,
     distribution_bucket: str,
     bundle_key: str,
     context: LambdaContext,
     config: AppConfig,
-) -> Tuple[str, List[S3EventRecord], List[S3EventRecord]]:
+) -> tuple[str, list[S3EventRecord], list[S3EventRecord]]:
     """
     Creates a bundle, uploads it, and returns the hash, a list of processed
     records, and a list of any remaining (unprocessed) records.

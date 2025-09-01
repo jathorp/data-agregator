@@ -24,15 +24,11 @@ from typing import BinaryIO, Iterator, List, Optional, Tuple, cast
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from .clients import S3Client
+from .config import AppConfig
 from .exceptions import ObjectNotFoundError
 from .schemas import S3EventRecord
 
 logger = logging.getLogger(__name__)
-
-# --- Tunables - future todo move to environment variables ---
-SPOOL_FILE_MAX_SIZE_BYTES: int = 64 * 1024 * 1024  # 64 MiB – spills to /tmp after this
-TIMEOUT_GUARD_THRESHOLD_MS: int = 10_000  # Bail out when < 10s remaining
-MAX_BUNDLE_ON_DISK_BYTES = 400 * 1024 * 1024  # e.g., 400MB to be safe
 
 
 # --- Helpers ---
@@ -55,7 +51,7 @@ def _sanitize_s3_key(key: str) -> Optional[str]:
 def _buffer_and_validate(
     stream: BinaryIO,
     expected_size: int,
-    spool_threshold: int = SPOOL_FILE_MAX_SIZE_BYTES,
+    spool_threshold: int,
 ) -> Optional[Tuple[BinaryIO, int]]:
     """
     Read *stream* into a SpooledTemporaryFile (in-RAM up to *spool_threshold*,
@@ -116,7 +112,7 @@ class HashingFileWrapper(io.BufferedIOBase):
 # --- Core Bundling Routine ---
 @contextmanager
 def create_tar_gz_bundle_stream(
-    s3_client: S3Client, records: List[S3EventRecord], context: LambdaContext
+    s3_client: S3Client, records: List[S3EventRecord], context: LambdaContext, config: AppConfig
 ) -> Iterator[Tuple[BinaryIO, str, List[S3EventRecord]]]:
     """
     Stream-creates a compressed tarball from S3 objects, stopping gracefully
@@ -126,7 +122,7 @@ def create_tar_gz_bundle_stream(
     successfully processed into the bundle.
     """
     output_spool_file: BinaryIO = SpooledTemporaryFile(  # type: ignore[assignment]
-        max_size=SPOOL_FILE_MAX_SIZE_BYTES, mode="w+b"
+        max_size=config.spool_file_max_size_bytes, mode="w+b"
     )
     hashing_writer = HashingFileWrapper(output_spool_file)
     processed_records: List[S3EventRecord] = []
@@ -146,7 +142,7 @@ def create_tar_gz_bundle_stream(
                     # 1. Gracefully stop if nearing timeout
                     if (
                         context.get_remaining_time_in_millis()
-                        < TIMEOUT_GUARD_THRESHOLD_MS
+                        < config.timeout_guard_threshold_ms
                     ):
                         logger.warning("Timeout threshold reached. Finalizing bundle.")
                         break
@@ -154,7 +150,7 @@ def create_tar_gz_bundle_stream(
                     metadata_size = record["s3"]["object"]["size"]
 
                     # 2. Gracefully stop if predicted disk usage is too high
-                    if (bytes_written + metadata_size) > MAX_BUNDLE_ON_DISK_BYTES:
+                    if (bytes_written + metadata_size) > config.max_bundle_on_disk_bytes:
                         logger.warning(
                             "Predicted disk usage exceeds limit. Finalizing bundle."
                         )
@@ -171,11 +167,11 @@ def create_tar_gz_bundle_stream(
                     bucket = record["s3"]["bucket"]["name"]
 
                     # 3. Decide how to handle the file based on its size
-                    if metadata_size < SPOOL_FILE_MAX_SIZE_BYTES:
+                    if metadata_size < config.spool_file_max_size_bytes:
                         # Small file: buffer first to validate size
                         stream = s3_client.get_file_content_stream(bucket, original_key)
                         with closing(stream):
-                            buffered = _buffer_and_validate(stream, metadata_size)
+                            buffered = _buffer_and_validate(stream, metadata_size, config.spool_file_max_size_bytes)
 
                         if buffered is None:
                             logger.warning(
@@ -253,6 +249,7 @@ def process_and_stage_batch(
     distribution_bucket: str,
     bundle_key: str,
     context: LambdaContext,
+    config: AppConfig,
 ) -> Tuple[str, List[S3EventRecord], List[S3EventRecord]]:
     """
     Creates a bundle, uploads it, and returns the hash, a list of processed
@@ -261,7 +258,7 @@ def process_and_stage_batch(
     if not records:
         raise ValueError("Cannot process an empty batch.")
 
-    with create_tar_gz_bundle_stream(s3_client, records, context) as (
+    with create_tar_gz_bundle_stream(s3_client, records, context, config) as (
         bundle,
         sha256_hash,
         processed_records,

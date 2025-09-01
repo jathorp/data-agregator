@@ -10,7 +10,6 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 
 # Import all necessary functions and exceptions from the core module
 from src.data_aggregator.core import (
-    MAX_BUNDLE_ON_DISK_BYTES,
     create_tar_gz_bundle_stream,
     process_and_stage_batch,
     _buffer_and_validate,
@@ -27,11 +26,21 @@ def mock_lambda_context() -> MagicMock:
     return context
 
 
+@pytest.fixture
+def mock_config() -> MagicMock:
+    """Provides a mock AppConfig with test values."""
+    config = MagicMock()
+    config.spool_file_max_size_bytes = 64 * 1024 * 1024
+    config.timeout_guard_threshold_ms = 10_000
+    config.max_bundle_on_disk_bytes = 400 * 1024 * 1024
+    return config
+
+
 # --- High-Level Orchestration Tests (`process_and_stage_batch`) ---
 
 
 @patch("src.data_aggregator.core.create_tar_gz_bundle_stream")
-def test_process_and_stage_batch_happy_path(mock_create_bundle, mock_lambda_context):
+def test_process_and_stage_batch_happy_path(mock_create_bundle, mock_lambda_context, mock_config):
     """Tests the happy path where all records are processed."""
     # ARRANGE
     mock_s3_client = MagicMock()
@@ -55,11 +64,12 @@ def test_process_and_stage_batch_happy_path(mock_create_bundle, mock_lambda_cont
         distribution_bucket="dist-bucket",
         bundle_key="bundle.tar.gz",
         context=mock_lambda_context,
+        config=mock_config,
     )
 
     # ASSERT
     mock_create_bundle.assert_called_once_with(
-        mock_s3_client, test_records, mock_lambda_context
+        mock_s3_client, test_records, mock_lambda_context, mock_config
     )
     mock_s3_client.upload_gzipped_bundle.assert_called_once_with(
         bucket="dist-bucket",
@@ -72,16 +82,16 @@ def test_process_and_stage_batch_happy_path(mock_create_bundle, mock_lambda_cont
     assert not remaining  # No records should be remaining
 
 
-def test_process_and_stage_batch_raises_for_empty_records(mock_lambda_context):
+def test_process_and_stage_batch_raises_for_empty_records(mock_lambda_context, mock_config):
     """Verifies ValueError for an empty list of records."""
     with pytest.raises(ValueError, match="Cannot process an empty batch."):
-        process_and_stage_batch([], MagicMock(), "dist", "key", mock_lambda_context)
+        process_and_stage_batch([], MagicMock(), "dist", "key", mock_lambda_context, mock_config)
 
 
 # --- Core Bundling Routine Tests (`create_tar_gz_bundle_stream`) ---
 
 
-def test_create_tar_gz_bundle_stream_happy_path(mock_lambda_context):
+def test_create_tar_gz_bundle_stream_happy_path(mock_lambda_context, mock_config):
     """Tests creating a valid archive with multiple files."""
     # ARRANGE
     mock_s3_client = MagicMock()
@@ -107,7 +117,7 @@ def test_create_tar_gz_bundle_stream_happy_path(mock_lambda_context):
 
     # ACT
     # Unpack all three return values
-    with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context) as (
+    with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context, mock_config) as (
         f,
         r_hash,
         p_records,
@@ -125,7 +135,7 @@ def test_create_tar_gz_bundle_stream_happy_path(mock_lambda_context):
         assert tar.extractfile("f1.txt").read() == file1
 
 
-def test_create_tar_gz_bundle_stream_stops_gracefully_on_timeout(mock_lambda_context):
+def test_create_tar_gz_bundle_stream_stops_gracefully_on_timeout(mock_lambda_context, mock_config):
     """Verifies the bundler stops processing but doesn't error on timeout."""
     # ARRANGE
     mock_s3_client = MagicMock()
@@ -137,7 +147,7 @@ def test_create_tar_gz_bundle_stream_stops_gracefully_on_timeout(mock_lambda_con
     mock_lambda_context.get_remaining_time_in_millis.side_effect = [20000, 5000]
 
     # ACT
-    with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context) as (
+    with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context, mock_config) as (
         _,
         _,
         processed_records,
@@ -151,13 +161,13 @@ def test_create_tar_gz_bundle_stream_stops_gracefully_on_timeout(mock_lambda_con
 
 
 def test_create_tar_gz_bundle_stream_stops_gracefully_on_disk_limit(
-    mock_lambda_context,
+    mock_lambda_context, mock_config
 ):
     """Verifies the bundler stops processing when the disk limit is reached."""
     # ARRANGE
     mock_s3_client = MagicMock()
     # Make the first file large enough to trigger the check for the second file
-    file1_size = MAX_BUNDLE_ON_DISK_BYTES - 100
+    file1_size = mock_config.max_bundle_on_disk_bytes - 100
     mock_s3_client.get_file_content_stream.return_value = io.BytesIO(b"a" * file1_size)
     records: list[S3EventRecord] = [
         {
@@ -170,7 +180,7 @@ def test_create_tar_gz_bundle_stream_stops_gracefully_on_disk_limit(
     ]
 
     # ACT
-    with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context) as (
+    with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context, mock_config) as (
         _,
         _,
         processed_records,
@@ -183,7 +193,7 @@ def test_create_tar_gz_bundle_stream_stops_gracefully_on_disk_limit(
     assert processed_records[0]["s3"]["object"]["key"] == "f1.txt"
 
 
-def test_create_tar_gz_bundle_stream_skips_mismatched_size_file(mock_lambda_context):
+def test_create_tar_gz_bundle_stream_skips_mismatched_size_file(mock_lambda_context, mock_config):
     """Verifies a file is skipped if its actual size mismatches its metadata."""
     # ARRANGE
     mock_s3_client = MagicMock()
@@ -195,7 +205,7 @@ def test_create_tar_gz_bundle_stream_skips_mismatched_size_file(mock_lambda_cont
     ]
 
     # ACT
-    with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context) as (
+    with create_tar_gz_bundle_stream(mock_s3_client, records, mock_lambda_context, mock_config) as (
         f,
         _,
         p_records,
@@ -230,11 +240,13 @@ def test_sanitize_s3_key(key, safe_key):
 
 def test_buffer_and_validate_ok():
     data = b"Hello world"
-    buf, size = _buffer_and_validate(io.BytesIO(data), expected_size=len(data))
+    spool_threshold = 1024 * 1024  # 1MB threshold
+    buf, size = _buffer_and_validate(io.BytesIO(data), expected_size=len(data), spool_threshold=spool_threshold)
     assert size == len(data)
     assert buf.read() == data
     buf.close()
 
 
 def test_buffer_and_validate_size_mismatch():
-    assert _buffer_and_validate(io.BytesIO(b"abc"), expected_size=10) is None
+    spool_threshold = 1024 * 1024  # 1MB threshold
+    assert _buffer_and_validate(io.BytesIO(b"abc"), expected_size=10, spool_threshold=spool_threshold) is None

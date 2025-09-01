@@ -93,9 +93,6 @@ def _make_idempotency_key(bucket: str, key: str, version: str | None) -> str:
     persistence_store=idempotency_persistence_layer,
 )
 def _process_record_idempotently(*, data: dict[str, Any]) -> bool:
-    hashed = hashlib.sha256(data["idempotency_key"].encode()).hexdigest()
-    logger.info("DEBUG: hashed_key=%s", hashed)  # remove after verifying
-
     """Wraps the idempotency check. If it runs, the item is not a duplicate."""
     logger.debug("Idempotency check passed for new item.", extra=data)
     return True
@@ -145,6 +142,7 @@ def _process_valid_records(
         distribution_bucket=CONFIG.distribution_bucket,
         bundle_key=bundle_key,
         context=context,
+        config=CONFIG,
     )
 
     processed_count = len(records_to_process) - len(remaining_records)

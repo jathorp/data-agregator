@@ -26,6 +26,9 @@ class AppConfig:
     idempotency_ttl_days: int
     max_bundle_input_mb: int
     log_level: str
+    spool_file_max_size_mb: int
+    timeout_guard_threshold_seconds: int
+    max_bundle_on_disk_mb: int
 
     # --- Derived Properties ---
     @property
@@ -35,6 +38,18 @@ class AppConfig:
     @property
     def max_bundle_input_bytes(self) -> int:
         return self.max_bundle_input_mb * 1_048_576
+
+    @property
+    def spool_file_max_size_bytes(self) -> int:
+        return self.spool_file_max_size_mb * 1_048_576
+
+    @property
+    def timeout_guard_threshold_ms(self) -> int:
+        return self.timeout_guard_threshold_seconds * 1000
+
+    @property
+    def max_bundle_on_disk_bytes(self) -> int:
+        return self.max_bundle_on_disk_mb * 1_048_576
 
     @classmethod
     def load_from_env(cls) -> "AppConfig":
@@ -57,6 +72,18 @@ class AppConfig:
             max_bundle_input_mb = int(os.getenv("MAX_BUNDLE_INPUT_MB", "100"))
             if max_bundle_input_mb <= 0:
                 raise ValueError("MAX_BUNDLE_INPUT_MB must be a positive integer.")
+
+            spool_file_max_size_mb = int(os.getenv("SPOOL_FILE_MAX_SIZE_MB", "64"))
+            if spool_file_max_size_mb <= 0:
+                raise ValueError("SPOOL_FILE_MAX_SIZE_MB must be a positive integer.")
+
+            timeout_guard_threshold_seconds = int(os.getenv("TIMEOUT_GUARD_THRESHOLD_SECONDS", "10"))
+            if timeout_guard_threshold_seconds <= 0:
+                raise ValueError("TIMEOUT_GUARD_THRESHOLD_SECONDS must be a positive integer.")
+
+            max_bundle_on_disk_mb = int(os.getenv("MAX_BUNDLE_ON_DISK_MB", "400"))
+            if max_bundle_on_disk_mb <= 0:
+                raise ValueError("MAX_BUNDLE_ON_DISK_MB must be a positive integer.")
 
             # --- Handle special-case variables like log level ---
             log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -83,6 +110,9 @@ class AppConfig:
             idempotency_ttl_days=idempotency_ttl_days,
             max_bundle_input_mb=max_bundle_input_mb,
             log_level=log_level,
+            spool_file_max_size_mb=spool_file_max_size_mb,
+            timeout_guard_threshold_seconds=timeout_guard_threshold_seconds,
+            max_bundle_on_disk_mb=max_bundle_on_disk_mb,
         )
 
 

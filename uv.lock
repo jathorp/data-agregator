@@ -227,6 +227,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aws-lambda-powertools" },
     { name = "aws-xray-sdk" },
+    { name = "boto3" },
 ]
 
 [package.dev-dependencies]
@@ -247,6 +248,7 @@ dev = [
 requires-dist = [
     { name = "aws-lambda-powertools", specifier = ">=3.17.0" },
     { name = "aws-xray-sdk", specifier = ">=2.14.0" },
+    { name = "boto3", specifier = ">=1.39.1" },
 ]
 
 [package.metadata.requires-dev]

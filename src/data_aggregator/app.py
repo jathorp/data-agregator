@@ -42,6 +42,22 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from .clients import S3Client
 from .config import get_config
 from .core import process_and_stage_batch
+from .exceptions import (
+    BundleCreationError,
+    DataAggregatorError,
+    DiskSpaceError,
+    InvalidS3EventError,
+    MemoryLimitError,
+    NonRetryableError,
+    RetryableError,
+    S3AccessDeniedError,
+    S3ObjectNotFoundError,
+    S3ThrottlingError,
+    S3TimeoutError,
+    ValidationError,
+    get_error_context,
+    is_retryable_error,
+)
 from .schemas import S3EventRecord
 
 # --- Global & Reusable Components ---
@@ -136,37 +152,139 @@ def _process_valid_records(
     now = datetime.now(timezone.utc)
     bundle_key = f"{now.strftime('%Y/%m/%d/%H')}/bundle-{context.aws_request_id}.tar.gz"
 
-    _, _, remaining_records = process_and_stage_batch(
-        records=records_to_process,
-        s3_client=s3_client,
-        distribution_bucket=CONFIG.distribution_bucket,
-        bundle_key=bundle_key,
-        context=context,
-        config=CONFIG,
-    )
+    try:
+        _, _, remaining_records = process_and_stage_batch(
+            records=records_to_process,
+            s3_client=s3_client,
+            distribution_bucket=CONFIG.distribution_bucket,
+            bundle_key=bundle_key,
+            context=context,
+            config=CONFIG,
+        )
 
-    processed_count = len(records_to_process) - len(remaining_records)
-    metrics.add_metric(
-        name="ProcessedRecordsInBundle", unit=MetricUnit.Count, value=processed_count
-    )
+        processed_count = len(records_to_process) - len(remaining_records)
+        metrics.add_metric(
+            name="ProcessedRecordsInBundle", unit=MetricUnit.Count, value=processed_count
+        )
 
-    if not remaining_records:
+        if not remaining_records:
+            return set()
+
+        metrics.add_metric(
+            name="RemainingRecordsForRetry",
+            unit=MetricUnit.Count,
+            value=len(remaining_records),
+        )
+        logger.warning(
+            "Some records were not processed due to constraints and will be retried.",
+            extra={
+                "remaining_count": len(remaining_records),
+                "example_keys": [r["s3"]["object"]["key"] for r in remaining_records[:3]],
+            },
+        )
+
+        return _get_message_ids_for_s3_records(remaining_records, record_to_message_id_map)
+        
+    except (MemoryLimitError, DiskSpaceError) as e:
+        # Critical resource errors - fail all records for retry
+        metrics.add_metric(name="CriticalResourceErrors", unit=MetricUnit.Count, value=1)
+        logger.error(
+            f"Critical resource error during batch processing: {e}",
+            extra={
+                "error_code": e.error_code,
+                "error_context": e.context,
+                "correlation_id": e.correlation_id,
+                "records_count": len(records_to_process)
+            }
+        )
+        # Return all message IDs for retry
+        return _get_message_ids_for_s3_records(records_to_process, record_to_message_id_map)
+        
+    except BundleCreationError as e:
+        # Bundle creation errors - determine if retryable
+        if is_retryable_error(e):
+            metrics.add_metric(name="RetryableBundleErrors", unit=MetricUnit.Count, value=1)
+            logger.warning(
+                f"Retryable bundle creation error: {e}",
+                extra={
+                    "error_code": e.error_code,
+                    "error_context": e.context,
+                    "correlation_id": e.correlation_id,
+                    "retryable": True
+                }
+            )
+            # Return all message IDs for retry
+            return _get_message_ids_for_s3_records(records_to_process, record_to_message_id_map)
+        else:
+            metrics.add_metric(name="NonRetryableBundleErrors", unit=MetricUnit.Count, value=1)
+            logger.error(
+                f"Non-retryable bundle creation error: {e}",
+                extra={
+                    "error_code": e.error_code,
+                    "error_context": e.context,
+                    "correlation_id": e.correlation_id,
+                    "retryable": False
+                }
+            )
+            # Don't retry non-retryable errors
+            return set()
+            
+    except (S3ThrottlingError, S3TimeoutError) as e:
+        # Retryable S3 errors
+        metrics.add_metric(name="RetryableS3Errors", unit=MetricUnit.Count, value=1)
+        logger.warning(
+            f"Retryable S3 error during batch processing: {e}",
+            extra={
+                "error_code": e.error_code,
+                "error_context": e.context,
+                "correlation_id": e.correlation_id,
+                "retryable": True
+            }
+        )
+        # Return all message IDs for retry
+        return _get_message_ids_for_s3_records(records_to_process, record_to_message_id_map)
+        
+    except (S3AccessDeniedError, ValidationError, InvalidS3EventError) as e:
+        # Non-retryable errors
+        metrics.add_metric(name="NonRetryableErrors", unit=MetricUnit.Count, value=1)
+        logger.error(
+            f"Non-retryable error during batch processing: {e}",
+            extra={
+                "error_code": e.error_code,
+                "error_context": e.context,
+                "correlation_id": e.correlation_id,
+                "retryable": False
+            }
+        )
+        # Don't retry non-retryable errors
         return set()
-
-    metrics.add_metric(
-        name="RemainingRecordsForRetry",
-        unit=MetricUnit.Count,
-        value=len(remaining_records),
-    )
-    logger.warning(
-        "Some records were not processed due to constraints and will be retried.",
-        extra={
-            "remaining_count": len(remaining_records),
-            "example_keys": [r["s3"]["object"]["key"] for r in remaining_records[:3]],
-        },
-    )
-
-    return _get_message_ids_for_s3_records(remaining_records, record_to_message_id_map)
+        
+    except DataAggregatorError as e:
+        # Other application-specific errors
+        retryable = is_retryable_error(e)
+        error_context = get_error_context(e)
+        
+        metrics.add_metric(
+            name="RetryableAppErrors" if retryable else "NonRetryableAppErrors",
+            unit=MetricUnit.Count,
+            value=1
+        )
+        
+        log_level = logger.warning if retryable else logger.error
+        log_level(
+            f"Application error during batch processing: {e}",
+            extra={
+                "error_code": getattr(e, 'error_code', 'UNKNOWN'),
+                "error_context": error_context,
+                "correlation_id": getattr(e, 'correlation_id', None),
+                "retryable": retryable
+            }
+        )
+        
+        if retryable:
+            return _get_message_ids_for_s3_records(records_to_process, record_to_message_id_map)
+        else:
+            return set()
 
 
 @logger.inject_lambda_context(log_event=True, correlation_id_path="aws_request_id")
@@ -222,9 +340,78 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
             for s3_record in s3_records:
                 idempotency_key = ""
                 try:
-                    s3_object = s3_record["s3"]["object"]
+                    # Validate S3 record structure
+                    if not isinstance(s3_record, dict) or "s3" not in s3_record:
+                        raise InvalidS3EventError(
+                            "Invalid S3 event record structure",
+                            error_code="INVALID_S3_RECORD_STRUCTURE",
+                            context={
+                                "message_id": message_id,
+                                "record_keys": list(s3_record.keys()) if isinstance(s3_record, dict) else None
+                            }
+                        )
+                    
+                    s3_data = s3_record["s3"]
+                    if not isinstance(s3_data, dict) or "object" not in s3_data or "bucket" not in s3_data:
+                        raise InvalidS3EventError(
+                            "Missing required S3 event fields",
+                            error_code="MISSING_S3_EVENT_FIELDS",
+                            context={
+                                "message_id": message_id,
+                                "s3_keys": list(s3_data.keys()) if isinstance(s3_data, dict) else None
+                            }
+                        )
+                    
+                    s3_object = s3_data["object"]
+                    s3_bucket = s3_data["bucket"]
+                    
+                    if not isinstance(s3_object, dict) or "key" not in s3_object:
+                        raise InvalidS3EventError(
+                            "Missing S3 object key",
+                            error_code="MISSING_S3_OBJECT_KEY",
+                            context={
+                                "message_id": message_id,
+                                "object_keys": list(s3_object.keys()) if isinstance(s3_object, dict) else None
+                            }
+                        )
+                    
+                    if not isinstance(s3_bucket, dict) or "name" not in s3_bucket:
+                        raise InvalidS3EventError(
+                            "Missing S3 bucket name",
+                            error_code="MISSING_S3_BUCKET_NAME",
+                            context={
+                                "message_id": message_id,
+                                "bucket_keys": list(s3_bucket.keys()) if isinstance(s3_bucket, dict) else None
+                            }
+                        )
+
                     s3_key = s3_object["key"]
                     s3_version = s3_object.get("versionId")
+                    bucket_name = s3_bucket["name"]
+                    
+                    # Validate key and bucket name
+                    if not s3_key or not isinstance(s3_key, str):
+                        raise ValidationError(
+                            "S3 object key is empty or invalid",
+                            error_code="INVALID_S3_KEY",
+                            context={
+                                "message_id": message_id,
+                                "key": s3_key,
+                                "key_type": type(s3_key).__name__
+                            }
+                        )
+                    
+                    if not bucket_name or not isinstance(bucket_name, str):
+                        raise ValidationError(
+                            "S3 bucket name is empty or invalid",
+                            error_code="INVALID_S3_BUCKET",
+                            context={
+                                "message_id": message_id,
+                                "bucket": bucket_name,
+                                "bucket_type": type(bucket_name).__name__
+                            }
+                        )
+
                     unique_record_key = (
                         f"{s3_key}#{s3_version}" if s3_version else s3_key
                     )
@@ -233,7 +420,6 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
                         message_id
                     )
 
-                    bucket_name = s3_record["s3"]["bucket"]["name"]
                     idempotency_key = _make_idempotency_key(
                         bucket_name, s3_key, s3_version
                     )
@@ -255,10 +441,27 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
                         "Skipping duplicate S3 object.",
                         extra={"idempotency_key": idempotency_key},
                     )
-                except Exception:
+                except (InvalidS3EventError, ValidationError) as e:
+                    metrics.add_metric(name="InvalidS3Records", unit=MetricUnit.Count, value=1)
+                    logger.warning(
+                        f"Invalid S3 record: {e}",
+                        extra={
+                            "messageId": message_id,
+                            "error_code": e.error_code,
+                            "error_context": e.context,
+                            "correlation_id": e.correlation_id
+                        }
+                    )
+                    failed_message_ids.add(message_id)
+                except Exception as e:
+                    metrics.add_metric(name="UnexpectedRecordErrors", unit=MetricUnit.Count, value=1)
                     logger.exception(
-                        "Failed to process an S3 record.",
-                        extra={"messageId": message_id},
+                        "Unexpected error processing S3 record.",
+                        extra={
+                            "messageId": message_id,
+                            "error_type": type(e).__name__,
+                            "error_message": str(e)
+                        },
                     )
                     failed_message_ids.add(message_id)
 

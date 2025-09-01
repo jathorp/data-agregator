@@ -29,6 +29,13 @@ class AppConfig:
     spool_file_max_size_mb: int
     timeout_guard_threshold_seconds: int
     max_bundle_on_disk_mb: int
+    
+    # --- Error Handling Configuration ---
+    max_retries_per_record: int
+    s3_operation_timeout_seconds: int
+    error_sampling_rate: float
+    enable_detailed_error_context: bool
+    max_error_context_size_kb: int
 
     # --- Derived Properties ---
     @property
@@ -50,6 +57,10 @@ class AppConfig:
     @property
     def max_bundle_on_disk_bytes(self) -> int:
         return self.max_bundle_on_disk_mb * 1_048_576
+
+    @property
+    def max_error_context_size_bytes(self) -> int:
+        return self.max_error_context_size_kb * 1024
 
     @classmethod
     def load_from_env(cls) -> "AppConfig":
@@ -93,6 +104,25 @@ class AppConfig:
                     f"LOG_LEVEL must be one of {allowed_log_levels}, not '{log_level}'"
                 )
 
+            # --- Handle error handling configuration ---
+            max_retries_per_record = int(os.getenv("MAX_RETRIES_PER_RECORD", "3"))
+            if max_retries_per_record < 0:
+                raise ValueError("MAX_RETRIES_PER_RECORD must be a non-negative integer.")
+
+            s3_operation_timeout_seconds = int(os.getenv("S3_OPERATION_TIMEOUT_SECONDS", "30"))
+            if s3_operation_timeout_seconds <= 0:
+                raise ValueError("S3_OPERATION_TIMEOUT_SECONDS must be a positive integer.")
+
+            error_sampling_rate = float(os.getenv("ERROR_SAMPLING_RATE", "1.0"))
+            if not 0.0 <= error_sampling_rate <= 1.0:
+                raise ValueError("ERROR_SAMPLING_RATE must be between 0.0 and 1.0.")
+
+            enable_detailed_error_context = os.getenv("ENABLE_DETAILED_ERROR_CONTEXT", "true").lower() in ("true", "1", "yes", "on")
+
+            max_error_context_size_kb = int(os.getenv("MAX_ERROR_CONTEXT_SIZE_KB", "16"))
+            if max_error_context_size_kb <= 0:
+                raise ValueError("MAX_ERROR_CONTEXT_SIZE_KB must be a positive integer.")
+
         except KeyError as e:
             raise ConfigurationError(
                 f"Missing required environment variable: {e.args[0]}"
@@ -113,6 +143,11 @@ class AppConfig:
             spool_file_max_size_mb=spool_file_max_size_mb,
             timeout_guard_threshold_seconds=timeout_guard_threshold_seconds,
             max_bundle_on_disk_mb=max_bundle_on_disk_mb,
+            max_retries_per_record=max_retries_per_record,
+            s3_operation_timeout_seconds=s3_operation_timeout_seconds,
+            error_sampling_rate=error_sampling_rate,
+            enable_detailed_error_context=enable_detailed_error_context,
+            max_error_context_size_kb=max_error_context_size_kb,
         )
 
 

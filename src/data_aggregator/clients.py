@@ -11,9 +11,16 @@ incorporate best practices like typed interfaces and efficient API usage.
 import logging
 from typing import BinaryIO, TYPE_CHECKING, Optional, cast
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError, ReadTimeoutError
 
-from .exceptions import ObjectNotFoundError
+from .exceptions import (
+    ObjectNotFoundError,
+    S3AccessDeniedError,
+    S3ObjectNotFoundError,
+    S3ThrottlingError,
+    S3TimeoutError,
+    BundleCreationError,
+)
 
 if TYPE_CHECKING:
     from mypy_boto3_s3.client import S3Client as S3ClientType
@@ -45,21 +52,92 @@ class S3Client:
     def get_file_content_stream(self, bucket: str, key: str) -> BinaryIO:
         """
         Retrieves an S3 object's body as a file-like streaming object.
-        Raises ObjectNotFoundError if the key does not exist.
+        Raises specific S3 exceptions based on the error type.
         """
         try:
             response = self._client.get_object(Bucket=bucket, Key=key)
             return cast(BinaryIO, response["Body"])
         except ClientError as e:
-            # Check if the specific error code is 'NoSuchKey'.
-            if e.response["Error"]["Code"] == "NoSuchKey":
-                # Raise our clean, application-specific exception.
-                raise ObjectNotFoundError(
-                    f"S3 object not found at bucket='{bucket}', key='{key}'"
+            error_code = e.response["Error"]["Code"]
+            error_message = e.response["Error"]["Message"]
+            
+            # Map boto3 error codes to our specific exception types
+            if error_code == "NoSuchKey":
+                raise S3ObjectNotFoundError(
+                    f"S3 object not found: {error_message}",
+                    error_code="S3_OBJECT_NOT_FOUND",
+                    context={
+                        "bucket": bucket,
+                        "key": key,
+                        "aws_error_code": error_code,
+                        "aws_error_message": error_message
+                    }
+                ) from e
+            elif error_code == "AccessDenied":
+                raise S3AccessDeniedError(
+                    f"Access denied to S3 object: {error_message}",
+                    error_code="S3_ACCESS_DENIED",
+                    context={
+                        "bucket": bucket,
+                        "key": key,
+                        "aws_error_code": error_code,
+                        "aws_error_message": error_message
+                    }
+                ) from e
+            elif error_code in ["Throttling", "ThrottlingException", "RequestLimitExceeded"]:
+                raise S3ThrottlingError(
+                    f"S3 request throttled: {error_message}",
+                    error_code="S3_THROTTLING",
+                    context={
+                        "bucket": bucket,
+                        "key": key,
+                        "aws_error_code": error_code,
+                        "aws_error_message": error_message
+                    }
+                ) from e
+            elif error_code in ["RequestTimeout", "RequestTimeoutException"]:
+                raise S3TimeoutError(
+                    f"S3 request timed out: {error_message}",
+                    error_code="S3_TIMEOUT",
+                    context={
+                        "bucket": bucket,
+                        "key": key,
+                        "aws_error_code": error_code,
+                        "aws_error_message": error_message
+                    }
                 ) from e
             else:
-                # If it's a different client error (like AccessDenied), re-raise it.
-                raise
+                # For other client errors, wrap in a generic S3 error
+                raise BundleCreationError(
+                    f"S3 client error: {error_message}",
+                    error_code="S3_CLIENT_ERROR",
+                    context={
+                        "bucket": bucket,
+                        "key": key,
+                        "aws_error_code": error_code,
+                        "aws_error_message": error_message
+                    }
+                ) from e
+        except ReadTimeoutError as e:
+            raise S3TimeoutError(
+                f"S3 read timeout while retrieving object",
+                error_code="S3_READ_TIMEOUT",
+                context={
+                    "bucket": bucket,
+                    "key": key,
+                    "timeout_error": str(e)
+                }
+            ) from e
+        except EndpointConnectionError as e:
+            raise S3TimeoutError(
+                f"S3 endpoint connection error",
+                error_code="S3_CONNECTION_ERROR",
+                context={
+                    "bucket": bucket,
+                    "key": key,
+                    "connection_error": str(e)
+                }
+            ) from e
 
     def upload_gzipped_bundle(
         self, bucket: str, key: str, file_obj: BinaryIO, content_hash: str
@@ -78,9 +156,89 @@ class S3Client:
             "Uploading bundle",
             extra={"bucket": bucket, "key": key, "kms_enabled": bool(self._kms_key_id)},
         )
-        self._client.upload_fileobj(
-            Fileobj=file_obj, Bucket=bucket, Key=key, ExtraArgs=extra_args
-        )
-        logger.debug(
-            "Upload (PUT) completed successfully", extra={"bucket": bucket, "key": key}
-        )
+        
+        try:
+            self._client.upload_fileobj(
+                Fileobj=file_obj, Bucket=bucket, Key=key, ExtraArgs=extra_args
+            )
+            logger.debug(
+                "Upload (PUT) completed successfully", extra={"bucket": bucket, "key": key}
+            )
+        except ClientError as e:
+            error_code = e.response["Error"]["Code"]
+            error_message = e.response["Error"]["Message"]
+            
+            # Map boto3 error codes to our specific exception types
+            if error_code == "AccessDenied":
+                raise S3AccessDeniedError(
+                    f"Access denied when uploading to S3: {error_message}",
+                    error_code="S3_UPLOAD_ACCESS_DENIED",
+                    context={
+                        "bucket": bucket,
+                        "key": key,
+                        "content_hash": content_hash,
+                        "kms_enabled": bool(self._kms_key_id),
+                        "aws_error_code": error_code,
+                        "aws_error_message": error_message
+                    }
+                ) from e
+            elif error_code in ["Throttling", "ThrottlingException", "RequestLimitExceeded"]:
+                raise S3ThrottlingError(
+                    f"S3 upload request throttled: {error_message}",
+                    error_code="S3_UPLOAD_THROTTLING",
+                    context={
+                        "bucket": bucket,
+                        "key": key,
+                        "content_hash": content_hash,
+                        "aws_error_code": error_code,
+                        "aws_error_message": error_message
+                    }
+                ) from e
+            elif error_code in ["RequestTimeout", "RequestTimeoutException"]:
+                raise S3TimeoutError(
+                    f"S3 upload timed out: {error_message}",
+                    error_code="S3_UPLOAD_TIMEOUT",
+                    context={
+                        "bucket": bucket,
+                        "key": key,
+                        "content_hash": content_hash,
+                        "aws_error_code": error_code,
+                        "aws_error_message": error_message
+                    }
+                ) from e
+            else:
+                # For other client errors, wrap in bundle creation error
+                raise BundleCreationError(
+                    f"Failed to upload bundle to S3: {error_message}",
+                    error_code="S3_UPLOAD_ERROR",
+                    context={
+                        "bucket": bucket,
+                        "key": key,
+                        "content_hash": content_hash,
+                        "kms_enabled": bool(self._kms_key_id),
+                        "aws_error_code": error_code,
+                        "aws_error_message": error_message
+                    }
+                ) from e
+        except ReadTimeoutError as e:
+            raise S3TimeoutError(
+                f"S3 upload read timeout",
+                error_code="S3_UPLOAD_READ_TIMEOUT",
+                context={
+                    "bucket": bucket,
+                    "key": key,
+                    "content_hash": content_hash,
+                    "timeout_error": str(e)
+                }
+            ) from e
+        except EndpointConnectionError as e:
+            raise S3TimeoutError(
+                f"S3 upload connection error",
+                error_code="S3_UPLOAD_CONNECTION_ERROR",
+                context={
+                    "bucket": bucket,
+                    "key": key,
+                    "content_hash": content_hash,
+                    "connection_error": str(e)
+                }
+            ) from e

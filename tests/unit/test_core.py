@@ -15,6 +15,7 @@ from src.data_aggregator.core import (
     _buffer_and_validate,
     _sanitize_s3_key,
 )
+from src.data_aggregator.exceptions import ValidationError, InvalidS3EventError
 from src.data_aggregator.schemas import S3EventRecord
 
 
@@ -83,9 +84,11 @@ def test_process_and_stage_batch_happy_path(mock_create_bundle, mock_lambda_cont
 
 
 def test_process_and_stage_batch_raises_for_empty_records(mock_lambda_context, mock_config):
-    """Verifies ValueError for an empty list of records."""
-    with pytest.raises(ValueError, match="Cannot process an empty batch."):
+    """Verifies InvalidS3EventError for an empty list of records."""
+    with pytest.raises(InvalidS3EventError) as exc_info:
         process_and_stage_batch([], MagicMock(), "dist", "key", mock_lambda_context, mock_config)
+    
+    assert exc_info.value.error_code == "EMPTY_BATCH"
 
 
 # --- Core Bundling Routine Tests (`create_tar_gz_bundle_stream`) ---
@@ -225,17 +228,31 @@ def test_create_tar_gz_bundle_stream_skips_mismatched_size_file(mock_lambda_cont
 
 
 @pytest.mark.parametrize(
-    "key, safe_key",
+    "key, expected_safe_key",
     [
-        ("foo/../../etc/passwd", None),
         ("/etc/passwd", "etc/passwd"),
         ("C:\\Windows\\System32.dll", "Windows/System32.dll"),
         ("foo/./bar//baz.txt", "foo/bar/baz.txt"),
-        ("a" * 1025, None),
     ],
 )
-def test_sanitize_s3_key(key, safe_key):
-    assert _sanitize_s3_key(key) == safe_key
+def test_sanitize_s3_key_valid_keys(key, expected_safe_key):
+    """Test that valid S3 keys are properly sanitized."""
+    assert _sanitize_s3_key(key) == expected_safe_key
+
+
+@pytest.mark.parametrize(
+    "invalid_key, expected_error_code",
+    [
+        ("foo/../../etc/passwd", "UNSAFE_S3_KEY_PATH"),
+        ("a" * 1025, "INVALID_S3_KEY_FORMAT"),
+    ],
+)
+def test_sanitize_s3_key_invalid_keys(invalid_key, expected_error_code):
+    """Test that invalid S3 keys raise ValidationError with appropriate error codes."""
+    with pytest.raises(ValidationError) as exc_info:
+        _sanitize_s3_key(invalid_key)
+    
+    assert exc_info.value.error_code == expected_error_code
 
 
 def test_buffer_and_validate_ok():

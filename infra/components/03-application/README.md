@@ -1,75 +1,184 @@
-# Component: 03-Application
+# Application Component (03-application)
 
-This Terraform component is responsible for deploying the core application logic of the pipeline. It provisions the AWS Lambda function, its SQS trigger, and all the necessary configuration and security settings to allow it to run.
+This Terraform component deploys the core data aggregator Lambda function and its associated resources. The Lambda function implements a pull-based architecture that processes files from the landing bucket and creates aggregated bundles in the distribution bucket.
 
-## Key Features & Design Decisions
+## Architecture Overview
 
-This component is designed to be secure, efficient, and resilient.
+The application component creates:
 
-### 1. Decoupled IAM Policy Attachment
+- **Lambda Function**: The main data aggregator that processes files from S3
+- **IAM Policy**: Least-privilege permissions for the Lambda function
+- **Security Group**: Network access controls for VPC-deployed Lambda
+- **SQS Event Source Mapping**: Triggers Lambda execution from queue messages
 
-*   **What:** This component does **not** create the Lambda's IAM Role. Instead, it looks up the role "shell" created by the `02-stateful-resources` component and attaches a specific, least-privilege IAM Policy to it.
-*   **Why:** This is a critical architectural decision that resolves circular dependencies between infrastructure components. It allows for a clean, linear deployment workflow (`01-network` -> `02-stateful-resources` -> `03-application`).
+## Resources Created
 
-### 2. Secure by Default Network Isolation
+### Lambda Function (`aws_lambda_function.aggregator`)
+- **Runtime**: Python 3.12 on ARM64 architecture
+- **Memory**: 512 MB (configurable)
+- **Timeout**: 180 seconds (configurable)
+- **Ephemeral Storage**: 2 GB (configurable)
+- **Concurrency**: Limited to 10 concurrent executions
+- **VPC Configuration**: Deployed in private subnets with security group
+- **Handler**: `data_aggregator.app.handler`
 
-*   **What:** The Lambda function is deployed into the private subnets of the VPC and is associated with a dedicated Security Group that has **no egress rules**.
-*   **Why:** This ensures the function is completely isolated from the internet and cannot initiate any outbound network connections. All communication with other AWS services (S3, SQS, DynamoDB) happens securely over private VPC Endpoints, which do not require security group egress rules. This aligns with a zero-trust security model.
+### IAM Policy (`aws_iam_policy.aggregator_lambda_policy`)
+Grants minimal required permissions:
+- **CloudWatch Logs**: Create log groups, streams, and put log events
+- **SQS**: Receive, delete messages, and get queue attributes
+- **S3 Landing Bucket**: Read objects and list bucket contents
+- **S3 Distribution Bucket**: Write aggregated bundle objects
+- **DynamoDB**: Full access to idempotency table for duplicate detection
+- **VPC**: Create/describe/delete network interfaces for VPC deployment
 
-### 3. Resilient SQS Trigger
+### Security Group (`aws_security_group.aggregator_lambda_sg`)
+Implements least-privilege network access:
+- **S3 Gateway Endpoint**: HTTPS (443) access via prefix list
+- **DynamoDB Gateway Endpoint**: HTTPS (443) access via prefix list  
+- **VPC Interface Endpoints**: HTTPS (443) access for SQS and KMS within VPC CIDR
 
-*   **What:** The `aws_lambda_event_source_mapping` resource connects the SQS queue to the Lambda function. It is configured with a batch size of 100 and a 5-second batching window to balance latency and cost.
-*   **Why:** Crucially, it enables the `ReportBatchItemFailures` feature. This allows the Lambda code to report partial failures within a batch, preventing a single "poison pill" message from blocking the entire pipeline and maximizing throughput (NFR-05).
+### SQS Event Source Mapping (`aws_lambda_event_source_mapping.sqs_trigger`)
+- **Batch Size**: 100 messages per invocation
+- **Batching Window**: 15 seconds maximum wait time
+- **Error Handling**: Reports batch item failures for partial batch processing
 
-### 4. Least-Privilege IAM Policy
+## Environment Variables
 
-*   **What:** The attached IAM policy grants the Lambda function only the exact permissions it needs to perform its job: read from the landing queue and bucket, write to the archive and distribution buckets, and manage records in the idempotency table.
-*   **Why:** This adheres to the principle of least privilege, minimizing the potential impact of a security compromise.
+The Lambda function receives these environment variables:
+
+| Variable | Description | Source |
+|----------|-------------|---------|
+| `DISTRIBUTION_BUCKET_NAME` | Target bucket for aggregated bundles | Stateful resources output |
+| `IDEMPOTENCY_TABLE_NAME` | DynamoDB table for duplicate detection | Stateful resources output |
+| `LOG_LEVEL` | Powertools logger level (INFO, DEBUG, etc.) | Variable (default: INFO) |
+| `IDEMPOTENCY_TTL_DAYS` | Days to retain idempotency keys | Variable (default: 7) |
+| `MAX_BUNDLE_INPUT_MB` | Maximum input size per bundle in MB | Variable (default: 100) |
+| `SERVICE_NAME` | Service name for observability | Project name variable |
+| `ENVIRONMENT` | Environment name for observability | Environment variable |
 
 ## Input Variables
 
-| Name                            | Description                                                                  | Type     | Required? |
-|:--------------------------------|:-----------------------------------------------------------------------------|:---------|:----------|
-| `project_name`                  | The name of the project.                                                     | `string` | Yes       |
-| `environment_name`              | The name of the environment (e.g., dev, prod).                               | `string` | Yes       |
-| `aws_region`                    | The AWS region to deploy resources into.                                     | `string` | Yes       |
-| `lambda_artifacts_bucket_name`  | The name of the central S3 bucket for storing Lambda deployment packages.    | `string` | Yes       |
-| `lambda_s3_key`                 | The object key for the Lambda deployment package in the artifacts S3 bucket. | `string` | Yes       |
-| `lambda_function_name`          | The name of the Lambda function.                                             | `string` | Yes       |
-| `lambda_handler`                | The handler for the Lambda function (e.g., 'app.handler').                   | `string` | No        |
-| `lambda_runtime`                | The runtime for the Lambda function.                                         | `string` | No        |
-| `lambda_timeout`                | The timeout in seconds for the Lambda function.                              | `number` | No        |
-| `lambda_memory_size`            | The amount of memory in MB to allocate to the Lambda function.               | `number` | No        |
-| `lambda_ephemeral_storage_size` | The size of the Lambda function's /tmp directory in MB.                      | `number` | No        |
-| `idempotency_ttl_days`          | The number of days to retain the idempotency key in DynamoDB.                | `number` | No        |
+### Required Variables
+- `project_name`: Project identifier for resource naming and tagging
+- `environment_name`: Environment identifier (dev, staging, prod)
+- `remote_state_bucket`: S3 bucket storing Terraform remote state
+- `aws_region`: AWS region for deployment
+- `lambda_artifacts_bucket_name`: S3 bucket containing Lambda deployment package
+- `lambda_s3_key`: Object key for Lambda ZIP file in artifacts bucket
+- `lambda_function_name`: Name for the Lambda function resource
+
+### Optional Variables
+- `lambda_handler`: Function handler (default: "app.handler")
+- `lambda_runtime`: Python runtime version (default: "python3.12")
+- `lambda_timeout`: Execution timeout in seconds (default: 180)
+- `lambda_memory_size`: Memory allocation in MB (default: 512)
+- `lambda_ephemeral_storage_size`: /tmp directory size in MB (default: 2048)
+- `idempotency_ttl_days`: DynamoDB TTL for idempotency keys (default: 7)
+- `log_level`: Powertools logger level (default: "INFO")
+- `max_bundle_input_mb`: Maximum input file size per bundle (default: 100)
 
 ## Outputs
 
-| Name                   | Description                                 |
-|:-----------------------|:--------------------------------------------|
-| `lambda_function_name` | The name of the aggregator Lambda function. |
-| `lambda_function_arn`  | The ARN of the aggregator Lambda function.  |
+- `lambda_function_name`: The deployed Lambda function name
+- `lambda_function_arn`: The Lambda function ARN for cross-component references
 
-## Deployment Instructions
+## Dependencies
+
+This component depends on outputs from:
+
+1. **01-network**: VPC ID, private subnet IDs, and VPC CIDR block
+2. **02-stateful-resources**: 
+   - S3 bucket ARNs and IDs (landing, distribution)
+   - SQS queue ARN for event source mapping
+   - DynamoDB table ARN and name for idempotency
+   - Lambda IAM role ARN and name
+
+## Deployment
 
 ### Prerequisites
+1. Deploy `01-network` component first
+2. Deploy `02-stateful-resources` component second
+3. Upload Lambda deployment package to artifacts S3 bucket
+4. Configure backend state storage
 
-*   Terraform CLI is installed.
-*   AWS CLI is installed and configured.
-*   The `01-network` and `02-stateful-resources` components must be successfully deployed first.
+### Deploy Command
+```bash
+cd infra/components/03-application
+terraform init -backend-config="../../environments/${ENV}/03-application.backend.tfvars"
+terraform plan -var-file="../../environments/${ENV}/common.tfvars" \
+               -var-file="../../environments/${ENV}/application.tfvars"
+terraform apply -var-file="../../environments/${ENV}/common.tfvars" \
+                -var-file="../../environments/${ENV}/application.tfvars"
+```
 
-### Deployment Steps
+### Environment Configuration Files
+- `common.tfvars`: Shared variables (project_name, environment_name, etc.)
+- `application.tfvars`: Component-specific variables (Lambda configuration)
+- `03-application.backend.tfvars`: Terraform backend configuration
 
-1.  **Navigate to Directory:** `cd components/03-application`
-2.  **Initialize Terraform:**
-    ```bash
-    # Example for the 'dev' environment
-    terraform init -backend-config="../../environments/dev/03-application.backend.tfvars"
-    ```
-3.  **Plan and Apply Changes:**
-    ```bash
-    # Example for the 'dev' environment
-    terraform plan -var-file="../../environments/dev/common.tfvars" -var-file="../../environments/dev/application.tfvars"
+## Security Considerations
 
-    terraform apply -var-file="../../environments/dev/common.tfvars" -var-file="../../environments/dev/application.tfvars"
-    ```
+### Network Security
+- Lambda deployed in private subnets with no internet access
+- Security group restricts outbound traffic to required AWS services only
+- Uses VPC endpoints to avoid internet routing for AWS API calls
+
+### IAM Security  
+- Follows principle of least privilege
+- Read-only access to landing bucket
+- Write-only access to distribution bucket
+- Scoped permissions to specific resources where possible
+
+### Operational Security
+- Reserved concurrency prevents runaway executions
+- Timeout limits prevent hung processes
+- Ephemeral storage sized appropriately for workload
+- Environment variables avoid hardcoded secrets
+
+## Troubleshooting
+
+### Common Issues
+
+**Lambda Function Not Triggering**
+- Verify SQS queue has messages
+- Check Lambda function logs in CloudWatch
+- Confirm event source mapping is active
+- Validate IAM permissions for SQS access
+
+**Permission Denied Errors**
+- Review IAM policy attachments
+- Verify resource ARNs in policy statements
+- Check VPC endpoint policies if using interface endpoints
+- Confirm Lambda execution role trust relationship
+
+**Network Connectivity Issues**
+- Verify security group egress rules
+- Check VPC endpoint configurations
+- Confirm subnet routing tables
+- Validate prefix list IDs for gateway endpoints
+
+**Performance Issues**
+- Monitor Lambda duration and memory usage
+- Adjust memory allocation if needed
+- Review ephemeral storage utilization
+- Consider increasing timeout for large files
+
+### Monitoring
+- CloudWatch Logs: `/aws/lambda/${function_name}`
+- CloudWatch Metrics: Lambda function metrics
+- X-Ray Tracing: Enabled via Powertools (if configured in observability component)
+- SQS Metrics: Queue depth, message age, processing rates
+
+## Architecture Decisions
+
+### VPC Deployment
+The Lambda function is deployed within a VPC for enhanced security and network control, despite the additional complexity of managing ENIs and VPC endpoints.
+
+### ARM64 Architecture
+Uses ARM64 (Graviton2) processors for better price-performance compared to x86_64, with Python 3.12 runtime support.
+
+### Reserved Concurrency
+Limited to 10 concurrent executions to prevent overwhelming downstream systems and control costs while maintaining reasonable throughput.
+
+### Security Group Design
+Implements explicit egress rules using AWS prefix lists for gateway endpoints and VPC CIDR for interface endpoints, following network security best practices.

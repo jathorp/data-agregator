@@ -76,3 +76,9 @@ variable "log_level" {
   type        = string
   default     = "INFO"
 }
+
+variable "max_bundle_input_mb" {
+  description = "The maximum cumulative size of source files allowed in a single bundle (in MB)."
+  type        = number
+  default     = 100
+}

@@ -11,8 +11,8 @@ The architecture is a fully decoupled, event-driven pipeline designed for resili
 3.  An **AWS Lambda Function** polls the queue in batches, processes the files, and performs several key actions:
     *   It aggregates multiple raw files into a single, compressed Gzip bundle.
     *   It calculates a SHA-256 hash of the bundle for data integrity validation.
-    *   It archives the final bundle to a long-term **S3 Archive Bucket**.
-    *   It securely delivers the bundle to an on-premise NiFi endpoint via HTTPS.
+    *   It stages the bundle in a **S3 Distribution Bucket** for the on-premise service to pull.
+    *   The bundle is automatically replicated to a long-term **S3 Archive Bucket** via S3 Same-Region Replication.
 4.  **CloudWatch** provides comprehensive monitoring, logging, and a sophisticated alerting strategy.
 5.  All stateful resources are encrypted and secured following the principle of least privilege.
 
@@ -25,7 +25,7 @@ The codebase is organized into logical directories with clear responsibilities. 
 | **`components/`**       | Contains the core Terraform code, broken down into distinct infrastructure components. Each component is managed as a standalone unit.                |
 | **`components/tf.sh`**  | **(New)** Standardized wrapper script inside each component. **This is the primary tool for all deployment, planning, and state operations.**         |
 | **`environments/`**     | Contains the configuration (`.tfvars`) for each deployment environment (e.g., `dev`, `prod`). This is where you define environment-specific settings. |
-| **`modules/`**          | Contains reusable, generic Terraform modules. For example, the `mock_nifi_endpoint` for testing in the `dev` environment.                             |
+| **`modules/`**          | Contains reusable, generic Terraform modules for shared infrastructure components.                             |
 | **`scripts/`**          | **(New)** Contains helper and maintenance scripts. The `tf.sh.template` (the master copy of the wrapper) and the `sync-wrappers.sh` script live here. |
 | **`one_time_setup.sh`** | A script to bootstrap the S3 backend and other prerequisites. This only needs to be run once per AWS account.                                         |
 
@@ -69,17 +69,9 @@ For a brand-new environment, you must deploy the components in sequence. To dest
 *   **Deployment Order:** `00-security` -> `01-network` -> `02-stateful-resources` -> `03-application` -> `04-observability`
 *   **Destruction Order:** `04-observability` -> `03-application` -> `02-stateful-resources` -> `01-network` -> `00-security`
 
-### Stage 3: Critical Post-Deployment Step (After First Deploy)
+### Stage 3: Post-Deployment Verification
 
-After the `03-application` component is deployed successfully for the first time, you **must** manually populate the NiFi credentials in AWS Secrets Manager. The application will not function until this is done.
-
-Run the following AWS CLI command (replacing values as needed for the environment):
-```bash
-aws secretsmanager put-secret-value \
-  --secret-id "data-aggregator/nifi-credentials-dev" \
-  --secret-string '{"username":"dev-user","password":"a-secure-password-goes-here"}' \
-  --region eu-west-2
-```
+After the `03-application` component is deployed successfully, verify that the Lambda function is properly configured and can access all required resources. The system uses a pull-based model where bundles are staged in the S3 Distribution Bucket for the on-premise service to retrieve.
 
 ---
 

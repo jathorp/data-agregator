@@ -136,6 +136,7 @@ resource "aws_lambda_function" "aggregator" {
       IDEMPOTENCY_TABLE_NAME   = data.terraform_remote_state.stateful.outputs.idempotency_table_name
       LOG_LEVEL                = var.log_level
       IDEMPOTENCY_TTL_DAYS     = var.idempotency_ttl_days
+      MAX_BUNDLE_INPUT_MB      = var.max_bundle_input_mb
       SERVICE_NAME             = var.project_name
       ENVIRONMENT              = var.environment_name
     }

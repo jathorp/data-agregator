@@ -1,10 +1,11 @@
 ### **Project: Real-Time Data Ingestion and Aggregation Pipeline**
 
-**Document Version: 0.2.0**
-**Date:** July 12, 2025
+**Document Version: 0.3.0**
+**Date:** September , 2025
 **Author(s):** john
 
 **Change Log:**
+*   **Version 0.3.0:** Enhanced README with comprehensive developer documentation including Quick Start guide, detailed project structure, development workflow, testing strategy, troubleshooting guide, and contributing guidelines while preserving all architectural documentation.
 *   **Version 0.2.0:** Major architectural change from a push-based delivery model to a pull-based model per new requirements. The system now stages aggregated data in a dedicated S3 bucket for the on-premise service to fetch. This simplifies the design by removing the need for HTTP delivery logic and circuit breakers.
 
 #### **1. Executive Summary**
@@ -14,6 +15,451 @@ This document outlines the requirements and technical design for a new data pipe
 The projected data volume is ~864,000 objects per day (avg. 10 files/sec). The solution leverages a modern, serverless, event-driven architecture on AWS. A key feature is the long-term archival of the final compressed data bundles, which occurs in parallel with staging the data for pickup. This dual-write approach provides a cost-effective and operationally relevant disaster recovery mechanism. The design guarantees end-to-end data integrity via cryptographic hashing and the entire infrastructure will be defined as code (IaC) for automated and auditable management.
 
 **Primary Success Metric:** ≥ 99.9% of incoming files will be successfully processed and made available in the S3 distribution bucket within 3 minutes of their arrival in the S3 landing zone under normal operating conditions.
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Python 3.13+
+- [uv](https://docs.astral.sh/uv/) package manager
+- AWS CLI configured with appropriate credentials
+
+### Development Setup
+```bash
+# Clone and setup
+git clone https://github.com/jathorp/data-agregator.git
+cd data-agregator
+
+# Install dependencies
+uv sync
+
+# Run tests
+uv run pytest
+
+# Build Lambda package
+./build.sh
+```
+
+### Verify Installation
+```bash
+# Check build output
+ls -la dist/lambda.zip
+
+# Run unit tests
+uv run pytest tests/unit/ -v
+
+# Check code quality
+uv run ruff check src/
+```
+
+---
+
+## 📁 Project Structure
+
+```
+data-agregator/
+├── src/                    # Lambda function source code
+│   ├── data_aggregator/    # Main application package
+│   │   ├── app.py         # Lambda handler and orchestration
+│   │   ├── core.py        # Core business logic
+│   │   ├── clients.py     # AWS service wrappers
+│   │   └── ...            # Additional modules
+│   └── README.md          # Detailed Lambda documentation
+├── infra/                 # Terraform infrastructure as code
+│   ├── components/        # Modular infrastructure components
+│   │   ├── 01-network/    # VPC, subnets, security groups
+│   │   ├── 02-stateful-resources/  # S3, DynamoDB, SQS
+│   │   ├── 03-application/         # Lambda, IAM roles
+│   │   └── 04-observability/       # CloudWatch, alarms
+│   ├── environments/      # Environment-specific configurations
+│   └── README.md         # Infrastructure deployment guide
+├── e2e_tests/            # End-to-end test suite
+│   ├── configs/          # Test scenario configurations
+│   ├── components/       # Test framework modules
+│   └── README.md        # E2E testing documentation
+├── tests/                # Unit and integration tests
+│   ├── unit/            # Isolated component tests
+│   └── integration/     # AWS service integration tests
+├── build.sh             # Lambda package build script
+├── pyproject.toml       # Python project configuration
+└── uv.lock             # Dependency lock file
+```
+
+### Key Design Principles
+- **Modular Architecture**: Clear separation between infrastructure, application logic, and testing
+- **Infrastructure as Code**: Complete AWS environment defined in Terraform
+- **Comprehensive Testing**: Unit, integration, and end-to-end test coverage
+- **Security First**: Least privilege IAM, encryption at rest and in transit
+- **Operational Excellence**: Detailed monitoring, logging, and alerting
+
+---
+
+## 🛠️ Development Workflow
+
+### Building the Lambda Package
+```bash
+./build.sh
+```
+Creates `dist/lambda.zip` optimized for AWS Lambda deployment with:
+- Runtime dependencies installed for `aarch64-manylinux2014`
+- Application code copied and optimized
+- Bytecode compilation disabled for faster cold starts
+
+### Running Tests
+
+#### Unit Tests (Fast, No AWS Dependencies)
+```bash
+# All unit tests
+uv run pytest tests/unit/
+
+# Specific test file
+uv run pytest tests/unit/test_core.py -v
+
+# With coverage
+uv run pytest tests/unit/ --cov=data_aggregator --cov-report=html
+```
+
+#### Integration Tests (Requires AWS Credentials)
+```bash
+# Integration tests with mocked AWS services
+uv run pytest tests/integration/
+
+# Test specific AWS integration
+uv run pytest tests/integration/test_app_integration.py -v
+```
+
+#### End-to-End Tests (Requires Deployed Infrastructure)
+```bash
+cd e2e_tests
+
+# Basic sanity check
+python main.py --config configs/config_00_singe_file.json
+
+# Comprehensive test suite
+python main.py --config configs/config_01_batching.json --verbose
+python main.py --config configs/config_04_concurrency.json --verbose
+```
+
+### Code Quality and Standards
+```bash
+# Linting and formatting
+uv run ruff check src/ tests/
+uv run ruff format src/ tests/
+
+# Type checking
+uv run mypy src/data_aggregator/
+
+# Security scanning
+uv run bandit -r src/
+```
+
+---
+
+## 🏗️ Infrastructure Management
+
+This project uses a modular Terraform approach for complete infrastructure automation. Each component can be deployed and managed independently.
+
+### Quick Deploy Process
+```bash
+# Navigate to infrastructure directory
+cd infra
+
+# Deploy components in order
+cd components/01-network && ./tf.sh dev apply
+cd ../02-stateful-resources && ./tf.sh dev apply  
+cd ../03-application && ./tf.sh dev apply
+cd ../04-observability && ./tf.sh dev apply
+```
+
+### Component Overview
+| Component | Purpose | Dependencies |
+|-----------|---------|--------------|
+| **01-network** | VPC, subnets, security groups | None |
+| **02-stateful-resources** | S3 buckets, DynamoDB, SQS | Network |
+| **03-application** | Lambda function, IAM roles | Stateful resources |
+| **04-observability** | CloudWatch alarms, dashboards | Application |
+
+### Environment Management
+- **Development**: `infra/environments/dev/`
+- **Production**: `infra/environments/prod/` (when created)
+
+For detailed infrastructure documentation, see [`infra/README.md`](infra/README.md).
+
+---
+
+## 🧪 Testing Strategy
+
+### Three-Tier Testing Approach
+
+#### 1. Unit Tests (`tests/unit/`)
+- **Purpose**: Test individual functions in complete isolation
+- **Speed**: Fast (< 1 second per test)
+- **Coverage**: Core business logic, data transformations, utilities
+- **Mocking**: All external dependencies mocked
+
+#### 2. Integration Tests (`tests/integration/`)
+- **Purpose**: Test AWS service interactions with realistic mocks
+- **Speed**: Medium (1-5 seconds per test)
+- **Coverage**: S3 operations, SQS processing, DynamoDB interactions
+- **Mocking**: Uses `moto` for AWS service simulation
+
+#### 3. End-to-End Tests (`e2e_tests/`)
+- **Purpose**: Test complete deployed system under real conditions
+- **Speed**: Slow (30+ seconds per test)
+- **Coverage**: Full pipeline from S3 upload to bundle creation
+- **Environment**: Requires live AWS infrastructure
+
+### E2E Test Scenarios
+
+| Test | Purpose | Key Validations |
+|------|---------|----------------|
+| **config_00_singe_file** | Basic sanity check | End-to-end pipeline functionality |
+| **config_01_batching** | SQS batch processing | Lambda batch handling, SQS integration |
+| **config_02_large_file** | Large file handling | >64MB streaming, memory efficiency |
+| **config_03_zero_byte** | Edge case handling | Empty file processing |
+| **config_04_concurrency** | High-load stress test | Scaling, idempotency under load |
+| **config_05_compressible** | Compression validation | Gzip effectiveness, bundle creation |
+| **config_06_disk_limit** | Resource constraints | Graceful handling of size limits |
+| **config_07_idempotency** | Duplicate prevention | Version-aware deduplication |
+| **config_08_backlog** | Throughput testing | High-volume processing capability |
+
+### Running Specific Test Categories
+```bash
+# Quick validation (unit tests only)
+uv run pytest tests/unit/ -x
+
+# Full local testing (unit + integration)
+uv run pytest tests/ -v
+
+# Production readiness (includes e2e)
+cd e2e_tests && python main.py --config configs/config_00_singe_file.json
+```
+
+For comprehensive E2E testing documentation, see [`e2e_tests/README.md`](e2e_tests/README.md).
+
+---
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+#### Build and Setup Problems
+```bash
+# Build script fails
+./build.sh
+# ❌ Error: uv not found
+# ✅ Solution: Install uv package manager
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# ❌ Error: Python 3.13 not found
+# ✅ Solution: Install Python 3.13+ or use pyenv
+pyenv install 3.13.0
+pyenv local 3.13.0
+```
+
+#### Test Failures
+```bash
+# Unit tests fail with import errors
+uv run pytest tests/unit/
+# ❌ ModuleNotFoundError: No module named 'data_aggregator'
+# ✅ Solution: Ensure you're in the project root directory
+cd /path/to/data-agregator
+uv sync
+
+# E2E tests fail with AWS errors
+cd e2e_tests && python main.py --config configs/config_00_singe_file.json
+# ❌ NoCredentialsError: Unable to locate credentials
+# ✅ Solution: Configure AWS credentials
+aws configure
+# or
+export AWS_PROFILE=your-profile-name
+```
+
+#### Infrastructure Deployment Issues
+```bash
+# Terraform component deployment fails
+cd infra/components/01-network && ./tf.sh dev plan
+# ❌ Error: Backend configuration not found
+# ✅ Solution: Run one-time setup first
+cd ../../ && ./one_time_setup.sh
+
+# ❌ Error: Access denied for S3 backend
+# ✅ Solution: Verify AWS credentials have sufficient permissions
+aws sts get-caller-identity
+```
+
+#### Lambda Function Issues
+```bash
+# Lambda deployment succeeds but function fails
+# ❌ Error: Task timed out after 15.00 seconds
+# ✅ Solution: Check CloudWatch logs for specific errors
+aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/data-aggregator"
+
+# ❌ Error: Unable to import module 'data_aggregator.app'
+# ✅ Solution: Rebuild Lambda package with correct dependencies
+./build.sh
+# Then redeploy via Terraform
+cd infra/components/03-application && ./tf.sh dev apply
+```
+
+### Performance Issues
+
+#### High Memory Usage
+- **Symptom**: Lambda function running out of memory
+- **Cause**: Processing too many large files simultaneously
+- **Solution**: Adjust `MAX_BUNDLE_ON_DISK_BYTES` environment variable or increase Lambda memory allocation
+
+#### Slow E2E Tests
+- **Symptom**: E2E tests taking longer than expected
+- **Cause**: AWS resource provisioning delays or network latency
+- **Solution**: Run tests during off-peak hours or use smaller test datasets
+
+### Debugging Tips
+
+#### Enable Verbose Logging
+```bash
+# For Lambda function (via environment variable)
+LOG_LEVEL=DEBUG
+
+# For E2E tests
+python main.py --config configs/config_00_singe_file.json --verbose
+
+# For unit tests
+uv run pytest tests/unit/ -v -s
+```
+
+#### Check AWS Resource Status
+```bash
+# Verify S3 buckets exist
+aws s3 ls | grep data-aggregator
+
+# Check SQS queue status
+aws sqs list-queues | grep data-aggregator
+
+# Verify Lambda function
+aws lambda list-functions | grep data-aggregator
+```
+
+---
+
+## 🤝 Contributing
+
+### Development Standards
+
+#### Code Quality Requirements
+- **Type Hints**: All functions must include comprehensive type annotations
+- **Documentation**: Public functions require docstrings following Google style
+- **Testing**: New features require unit tests with >90% coverage
+- **Security**: No hardcoded credentials or sensitive data in code
+
+#### Code Style
+```bash
+# Format code before committing
+uv run ruff format src/ tests/ e2e_tests/
+
+# Check for linting issues
+uv run ruff check src/ tests/ e2e_tests/
+
+# Type checking
+uv run mypy src/data_aggregator/
+
+# Security scanning
+uv run bandit -r src/
+```
+
+### Development Workflow
+
+#### Setting Up Development Environment
+```bash
+# 1. Fork and clone the repository
+git clone https://github.com/your-username/data-agregator.git
+cd data-agregator
+
+# 2. Create development branch
+git checkout -b feature/your-feature-name
+
+# 3. Install dependencies
+uv sync
+
+# 4. Verify setup
+uv run pytest tests/unit/ -v
+./build.sh
+```
+
+#### Making Changes
+```bash
+# 1. Make your changes
+# 2. Add comprehensive tests
+uv run pytest tests/unit/test_your_new_feature.py -v
+
+# 3. Run full test suite
+uv run pytest tests/ -v
+
+# 4. Check code quality
+uv run ruff check src/ tests/
+uv run mypy src/data_aggregator/
+
+# 5. Build and verify
+./build.sh
+```
+
+### Pull Request Process
+
+#### Before Submitting
+- [ ] All tests pass locally (`uv run pytest`)
+- [ ] Code follows style guidelines (`uv run ruff check`)
+- [ ] Type checking passes (`uv run mypy src/`)
+- [ ] Documentation updated for any API changes
+- [ ] E2E tests pass if infrastructure changes made
+
+#### PR Requirements
+1. **Clear Description**: Explain what changes were made and why
+2. **Test Coverage**: Include tests for new functionality
+3. **Documentation**: Update relevant README files and docstrings
+4. **Breaking Changes**: Clearly document any breaking changes
+5. **Performance Impact**: Note any performance implications
+
+#### Review Process
+- All PRs require at least one approval from a maintainer
+- Automated checks must pass (linting, type checking, tests)
+- Infrastructure changes require additional review
+- Security-related changes require security team review
+
+### Adding New Features
+
+#### New Lambda Functionality
+1. Add core logic to appropriate module in `src/data_aggregator/`
+2. Create comprehensive unit tests in `tests/unit/`
+3. Add integration tests if AWS services involved
+4. Update environment variables documentation if needed
+
+#### New Infrastructure Components
+1. Create new Terraform component in `infra/components/`
+2. Follow existing naming and structure conventions
+3. Add component to deployment order documentation
+4. Test deployment in development environment
+
+#### New E2E Test Scenarios
+1. Create configuration file in `e2e_tests/configs/`
+2. Follow naming convention: `config_XX_descriptive_name.json`
+3. Add test description to `e2e_tests/README.md`
+4. Implement custom test logic if needed in `components/runner.py`
+
+### Getting Help
+
+#### Documentation Resources
+- **Architecture**: Main README sections 4-5
+- **Lambda Details**: [`src/README.md`](src/README.md)
+- **Infrastructure**: [`infra/README.md`](infra/README.md)
+- **Testing**: [`e2e_tests/README.md`](e2e_tests/README.md)
+
+#### Contact and Support
+- **Issues**: Use GitHub Issues for bug reports and feature requests
+- **Discussions**: Use GitHub Discussions for questions and ideas
+- **Security**: Report security issues privately via email
+
+---
 
 #### **2. Business & Functional Requirements**
 

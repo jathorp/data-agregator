@@ -60,7 +60,7 @@ def test_get_config_happy_path(mock_valid_env):
     assert config.max_retries_per_record == 5
     assert config.s3_operation_timeout_seconds == 60
     assert config.error_sampling_rate == 0.8
-    assert config.enable_detailed_error_context == False
+    assert not config.enable_detailed_error_context
     assert config.max_error_context_size_kb == 32
     # Test derived properties
     assert config.spool_file_max_size_bytes == 32 * 1024 * 1024
@@ -106,7 +106,7 @@ def test_get_config_uses_defaults(monkeypatch):
     assert config.max_retries_per_record == 3  # Default
     assert config.s3_operation_timeout_seconds == 30  # Default
     assert config.error_sampling_rate == 1.0  # Default
-    assert config.enable_detailed_error_context == True  # Default
+    assert config.enable_detailed_error_context  # Default
     assert config.max_error_context_size_kb == 16  # Default
     # Test derived properties with defaults
     assert config.spool_file_max_size_bytes == 64 * 1024 * 1024

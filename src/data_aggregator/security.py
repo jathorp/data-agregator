@@ -104,66 +104,57 @@ def sanitize_s3_key(key: str) -> str:
         raise ValidationError(
             "S3 key must be a string.",
             error_code="INVALID_S3_KEY_TYPE",
-            context={"key_type": type(key).__name__}
+            context={"key_type": type(key).__name__},
         )
-
     if not key:
-        raise ValidationError(
-            "S3 key cannot be empty.",
-            error_code="INVALID_S3_KEY_FORMAT"
-        )
+        raise ValidationError("S3 key cannot be empty.", error_code="INVALID_S3_KEY_FORMAT")
 
     # -- Start Canonicalization --
     decoded_key = key
-    for _ in range(5):
+    for _ in range(5):  # Limit iterations to prevent denial-of-service
         unquoted = urllib.parse.unquote(decoded_key)
         if unquoted == decoded_key:
             break
         decoded_key = unquoted
 
     try:
+        # Use NFKC for aggressive compatibility normalization to catch more homoglyphs.
         normalized_key = unicodedata.normalize('NFKC', decoded_key)
     except Exception:
         raise ValidationError(
             "S3 key contains invalid Unicode sequences.",
             error_code="INVALID_S3_KEY_UNICODE",
-            context={"key": decoded_key}
-        )
-
-    # -- All canonicalization is done. Now, start validation. --
-
-    # 2. VALIDATION OF THE CANONICAL KEY
-
-    # CRITICAL: Check length AFTER normalization.
-    if len(normalized_key.encode("utf-8")) > 1024:
-        raise ValidationError(
-            "S3 key exceeds 1024-byte UTF-8 limit.",
-            error_code="INVALID_S3_KEY_LENGTH",
-            context={"key": key, "normalized_key": normalized_key}
+            context={"key": decoded_key},
         )
 
     posix_key = normalized_key.replace("\\", "/")
     safe_key = _DRIVE_PREFIX.sub("", posix_key)
+    # -- All canonicalization is done. Now, start validation. --
 
+    # 2. VALIDATION OF THE FINAL CANONICAL KEY
+    # CRITICAL: Check length AFTER all normalization and stripping.
+    if len(safe_key.encode("utf-8")) > 1024:
+        raise ValidationError(
+            "S3 key exceeds 1024-byte UTF-8 limit.",
+            error_code="INVALID_S3_KEY_LENGTH",
+            context={"key": key, "final_key": safe_key},
+        )
+
+    # Check for forbidden characters in the final canonical form.
     for char in safe_key:
         code = ord(char)
-        if code == 0x00:
-            raise ValidationError(
-                "S3 key contains null byte.",
-                error_code="INVALID_S3_KEY_CHARACTER",
-                context={"key": safe_key}
-            )
+        # The null byte (0x00) is covered by the _INVALID_CONTROL_CHARS set.
         if code in _INVALID_CONTROL_CHARS:
             raise ValidationError(
                 "S3 key contains invalid control characters.",
                 error_code="INVALID_S3_KEY_CHARACTER",
-                context={"key": safe_key, "char_code": hex(code)}
+                context={"key": safe_key, "char_code": hex(code)},
             )
         if unicodedata.category(char) in _UNICODE_FORMAT_CHAR_CATEGORIES:
             raise ValidationError(
                 "S3 key contains invalid Unicode format characters.",
                 error_code="INVALID_S3_KEY_CHARACTER",
-                context={"key": safe_key, "char_code": hex(code)}
+                context={"key": safe_key, "char_code": hex(code)},
             )
 
     # 3. PATH COMPONENT VALIDATION AND FINAL ASSEMBLY
@@ -171,19 +162,17 @@ def sanitize_s3_key(key: str) -> str:
     for part in safe_key.split('/'):
         if part in {"", "."}:
             continue
-
         if part == "..":
             raise ValidationError(
                 "S3 key contains path traversal sequence ('..').",
                 error_code="UNSAFE_S3_KEY_PATH",
-                context={"key": key, "normalized_key": safe_key}
+                context={"key": key, "normalized_key": safe_key},
             )
-
         if part.strip() != part:
             raise ValidationError(
                 "S3 key component contains leading or trailing whitespace.",
                 error_code="INVALID_S3_KEY_FORMAT",
-                context={"key": key, "component": part}
+                context={"key": key, "component": part},
             )
 
         base_name = part.split(".", 1)[0].upper()
@@ -191,18 +180,16 @@ def sanitize_s3_key(key: str) -> str:
             raise ValidationError(
                 "S3 key contains a Windows reserved device name.",
                 error_code="UNSAFE_S3_KEY_PATH",
-                context={"key": key, "device_name": part}
+                context={"key": key, "device_name": part},
             )
-
         safe_components.append(part)
 
     final_path = "/".join(safe_components)
-
     if not final_path:
         raise ValidationError(
             "S3 key resolves to an empty or invalid path.",
             error_code="UNSAFE_S3_KEY_PATH",
-            context={"key": key, "normalized_key": safe_key}
+            context={"key": key, "normalized_key": safe_key},
         )
 
     return final_path

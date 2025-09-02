@@ -122,7 +122,7 @@ def sanitize_s3_key(key: str) -> str:
         decoded_key = unquoted
 
     try:
-        normalized_key = unicodedata.normalize('NFC', decoded_key)
+        normalized_key = unicodedata.normalize('NFKC', decoded_key)
     except Exception:
         raise ValidationError(
             "S3 key contains invalid Unicode sequences.",

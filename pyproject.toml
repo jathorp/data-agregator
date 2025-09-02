@@ -1,6 +1,6 @@
 [project]
 name = "data-aggregator"
-version = "0.2.0"
+version = "0.3.0"
 description = "Sync data between S3 and MinIO with aggregation and compresseion"
 readme = "README.md"
 authors = [

@@ -26,7 +26,12 @@ def main():
     args = parser.parse_args()
 
     # 1. Load the configuration object first.
-    config = load_configuration(args)
+    try:
+        config = load_configuration(args)
+    except FileNotFoundError as e:
+        # Display clean error message without traceback for config file issues
+        print(str(e))
+        exit(1)
 
     # 2. Run the pre-flight check. This function will exit the script on failure.
     verify_aws_connectivity(config)

@@ -13,10 +13,10 @@ from src.data_aggregator.core import (
     create_tar_gz_bundle_stream,
     process_and_stage_batch,
     _buffer_and_validate,
-    _sanitize_s3_key,
 )
 from src.data_aggregator.exceptions import ValidationError, InvalidS3EventError
 from src.data_aggregator.schemas import S3EventRecord
+from src.data_aggregator.security import sanitize_s3_key
 
 
 @pytest.fixture
@@ -225,34 +225,6 @@ def test_create_tar_gz_bundle_stream_skips_mismatched_size_file(mock_lambda_cont
 
 
 # --- Helper Function Tests ---
-
-
-@pytest.mark.parametrize(
-    "key, expected_safe_key",
-    [
-        ("/etc/passwd", "etc/passwd"),
-        ("C:\\Windows\\System32.dll", "Windows/System32.dll"),
-        ("foo/./bar//baz.txt", "foo/bar/baz.txt"),
-    ],
-)
-def test_sanitize_s3_key_valid_keys(key, expected_safe_key):
-    """Test that valid S3 keys are properly sanitized."""
-    assert _sanitize_s3_key(key) == expected_safe_key
-
-
-@pytest.mark.parametrize(
-    "invalid_key, expected_error_code",
-    [
-        ("foo/../../etc/passwd", "UNSAFE_S3_KEY_PATH"),
-        ("a" * 1025, "INVALID_S3_KEY_FORMAT"),
-    ],
-)
-def test_sanitize_s3_key_invalid_keys(invalid_key, expected_error_code):
-    """Test that invalid S3 keys raise ValidationError with appropriate error codes."""
-    with pytest.raises(ValidationError) as exc_info:
-        _sanitize_s3_key(invalid_key)
-    
-    assert exc_info.value.error_code == expected_error_code
 
 
 def test_buffer_and_validate_ok():

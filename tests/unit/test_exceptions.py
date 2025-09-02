@@ -1,8 +1,6 @@
 # tests/unit/test_exceptions.py
 
-import pytest
 import json
-from unittest.mock import Mock
 from data_aggregator.exceptions import (
     DataAggregatorError,
     RetryableError,

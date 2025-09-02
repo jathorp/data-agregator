@@ -14,7 +14,6 @@ responsible for:
 6.  Implementing robust partial batch failure handling.
 """
 
-import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -48,10 +47,7 @@ from .exceptions import (
     DiskSpaceError,
     InvalidS3EventError,
     MemoryLimitError,
-    NonRetryableError,
-    RetryableError,
     S3AccessDeniedError,
-    S3ObjectNotFoundError,
     S3ThrottlingError,
     S3TimeoutError,
     ValidationError,

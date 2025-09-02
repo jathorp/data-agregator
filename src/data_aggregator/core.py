@@ -14,8 +14,6 @@ operation within a memory-constrained AWS Lambda environment.
 import hashlib
 import io
 import logging
-import os
-import re
 import tarfile
 from contextlib import closing, contextmanager
 from tempfile import SpooledTemporaryFile
@@ -38,39 +36,12 @@ from .exceptions import (
     ValidationError,
 )
 from .schemas import S3EventRecord
+from .security import sanitize_s3_key
 
 logger = logging.getLogger(__name__)
 
 
 # --- Helpers ---
-def _sanitize_s3_key(key: str) -> str:
-    """Return a safe, relative POSIX path or raise ValidationError if the key is disallowed."""
-    try:
-        if any(ord(c) < 0x1F for c in key) or len(key.encode("utf-8")) > 1024:
-            raise ValidationError(
-                "S3 key contains invalid characters or exceeds length limit",
-                error_code="INVALID_S3_KEY_FORMAT",
-                context={"key": key, "key_length": len(key.encode("utf-8"))}
-            )
-        key_no_drive = re.sub(r"^[a-zA-Z]:", "", key)
-        path_with_fwd_slashes = key_no_drive.replace("\\", "/")
-        normalized_path = os.path.normpath(path_with_fwd_slashes)
-        safe_key = normalized_path.lstrip("/")
-        if safe_key.startswith("..") or safe_key in {"", "."}:
-            raise ValidationError(
-                "S3 key contains path traversal or invalid path components",
-                error_code="UNSAFE_S3_KEY_PATH",
-                context={"key": key, "normalized_path": safe_key}
-            )
-        return safe_key
-    except TypeError as e:
-        raise ValidationError(
-            "S3 key is not a valid string",
-            error_code="INVALID_S3_KEY_TYPE",
-            context={"key": key, "type": type(key).__name__}
-        ) from e
-
-
 def _buffer_and_validate(
     stream: BinaryIO,
     expected_size: int,
@@ -180,7 +151,7 @@ def create_tar_gz_bundle_stream(
                         break
 
                     original_key = record["s3"]["object"]["key"]
-                    safe_key = _sanitize_s3_key(original_key)
+                    safe_key = sanitize_s3_key(original_key)
 
                     bucket = record["s3"]["bucket"]["name"]
 

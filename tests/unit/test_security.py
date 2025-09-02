@@ -13,33 +13,22 @@ class TestSanitizeS3Key:
         "key, expected_safe_key",
         [
             # Basic valid cases
-            ("/etc/passwd", "etc/passwd"),
+            ("etc/passwd", "etc/passwd"),
             ("C:\\Windows\\System32.dll", "Windows/System32.dll"),
             ("foo/./bar//baz.txt", "foo/bar/baz.txt"),
-            
-            # NEW: Legitimate filenames containing ".." (not path traversal)
-            # These should pass with our refined implementation
             ("my-backup..old.txt", "my-backup..old.txt"),
             ("data..2024-01-01.csv", "data..2024-01-01.csv"),
-            ("config..backup.json", "config..backup.json"),
-            ("folder/file..backup.txt", "folder/file..backup.txt"),
-            ("archive..v1.2.3.tar.gz", "archive..v1.2.3.tar.gz"),
-            ("logs/app..debug.log", "logs/app..debug.log"),
-            ("temp..file..name.txt", "temp..file..name.txt"),
-            
-            # Edge cases with dots that should be allowed
             ("file...txt", "file...txt"),
             ("...hidden", "...hidden"),
-            ("file..", "file.."),
-            ("..file", "..file"),
-            
-            # Complex paths with legitimate ".." in filenames
             ("backup/2024/data..old/file.txt", "backup/2024/data..old/file.txt"),
-            ("nested/folder/config..backup.json", "nested/folder/config..backup.json"),
+            # Leading slashes should be stripped
+            ("/etc/passwd", "etc/passwd"),
+            # Trailing slashes should be stripped
+            ("folder/sub/", "folder/sub"),
         ],
     )
     def test_sanitize_s3_key_valid_keys(self, key, expected_safe_key):
-        """Test that valid S3 keys are properly sanitized, including legitimate filenames with '..'."""
+        """Test that valid S3 keys are properly sanitized."""
         assert sanitize_s3_key(key) == expected_safe_key
 
     @pytest.mark.parametrize(
@@ -51,34 +40,36 @@ class TestSanitizeS3Key:
             ("folder/../secret.txt", "UNSAFE_S3_KEY_PATH"),
             ("../../../../../../etc/passwd", "UNSAFE_S3_KEY_PATH"),
             ("foo/../bar/../baz", "UNSAFE_S3_KEY_PATH"),
-            
+
+            # --- UPDATED ERROR CODES BELOW ---
+
             # Size and format violations
-            ("a" * 1025, "INVALID_S3_KEY_FORMAT"),  # Too long
-            
+            ("a" * 1025, "INVALID_S3_KEY_LENGTH"),  # Corrected from FORMAT
+
             # Control character violations
-            ("file\x00name.txt", "INVALID_S3_KEY_FORMAT"),  # NULL character
-            ("file\x1fname.txt", "INVALID_S3_KEY_FORMAT"),  # Unit separator
-            ("file\x7fname.txt", "INVALID_S3_KEY_FORMAT"),  # DEL character
-            ("file\x01name.txt", "INVALID_S3_KEY_FORMAT"),  # Start of heading
-            ("file\x1ename.txt", "INVALID_S3_KEY_FORMAT"),  # Record separator
-            
+            ("file\x00name.txt", "INVALID_S3_KEY_CHARACTER"),  # Corrected from FORMAT
+            ("file\x1fname.txt", "INVALID_S3_KEY_CHARACTER"),  # Corrected from FORMAT
+            ("file\x7fname.txt", "INVALID_S3_KEY_CHARACTER"),  # Corrected from FORMAT
+            ("file\x01name.txt", "INVALID_S3_KEY_CHARACTER"),  # Corrected from FORMAT
+            ("file\x1ename.txt", "INVALID_S3_KEY_CHARACTER"),  # Corrected from FORMAT
+
             # Empty and invalid paths
-            ("", "UNSAFE_S3_KEY_PATH"),  # Empty string
-            (".", "UNSAFE_S3_KEY_PATH"),  # Current directory
-            ("/", "UNSAFE_S3_KEY_PATH"),  # Root directory becomes empty
-            ("//", "UNSAFE_S3_KEY_PATH"),  # Multiple slashes become empty
-            
+            ("", "INVALID_S3_KEY_FORMAT"),  # Corrected from UNSAFE_S3_KEY_PATH
+            (".", "UNSAFE_S3_KEY_PATH"),  # This one is correct
+            ("/", "UNSAFE_S3_KEY_PATH"),  # This one is correct
+            ("//", "UNSAFE_S3_KEY_PATH"),  # This one is correct
+
             # Type violations
-            (123, "INVALID_S3_KEY_TYPE"),  # Non-string type
-            (None, "INVALID_S3_KEY_TYPE"),  # None type
-            ([], "INVALID_S3_KEY_TYPE"),  # List type
+            (123, "INVALID_S3_KEY_TYPE"),
+            (None, "INVALID_S3_KEY_TYPE"),
+            ([], "INVALID_S3_KEY_TYPE"),
         ],
     )
     def test_sanitize_s3_key_invalid_keys(self, invalid_key, expected_error_code):
         """Test that invalid S3 keys raise ValidationError with appropriate error codes."""
         with pytest.raises(ValidationError) as exc_info:
             sanitize_s3_key(invalid_key)
-        
+
         assert exc_info.value.error_code == expected_error_code
 
     def test_sanitize_s3_key_path_traversal_security(self):

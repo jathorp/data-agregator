@@ -3,7 +3,8 @@
 import pytest
 
 # Make sure your imports match your project structure
-from src.data_aggregator.security import sanitize_s3_key, ValidationError
+from src.data_aggregator.security import sanitize_s3_key
+from src.data_aggregator.exceptions import ValidationError
 
 
 class TestSanitizeS3Key:

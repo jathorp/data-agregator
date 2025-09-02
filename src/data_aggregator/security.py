@@ -17,13 +17,7 @@ import unicodedata
 import urllib.parse
 from typing import Set
 
-# Assuming a custom exception class is defined elsewhere in the project
-class ValidationError(ValueError):
-    """Custom exception for validation errors."""
-    def __init__(self, message, error_code=None, context=None):
-        super().__init__(message)
-        self.error_code = error_code
-        self.context = context or {}
+from .exceptions import ValidationError
 
 # --- Module-level constants for performance and clarity ---
 

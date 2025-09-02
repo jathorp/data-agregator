@@ -63,22 +63,18 @@ class S3Client:
             # Map boto3 error codes to our specific exception types
             if error_code == "NoSuchKey":
                 raise S3ObjectNotFoundError(
-                    f"S3 object not found: {error_message}",
-                    error_code="S3_OBJECT_NOT_FOUND",
+                    bucket=bucket,
+                    key=key,
                     context={
-                        "bucket": bucket,
-                        "key": key,
                         "aws_error_code": error_code,
                         "aws_error_message": error_message,
                     },
                 ) from e
             elif error_code == "AccessDenied":
                 raise S3AccessDeniedError(
-                    f"Access denied to S3 object: {error_message}",
-                    error_code="S3_ACCESS_DENIED",
+                    bucket=bucket,
+                    key=key,
                     context={
-                        "bucket": bucket,
-                        "key": key,
                         "aws_error_code": error_code,
                         "aws_error_message": error_message,
                     },
@@ -167,11 +163,9 @@ class S3Client:
             # Map boto3 error codes to our specific exception types
             if error_code == "AccessDenied":
                 raise S3AccessDeniedError(
-                    f"Access denied when uploading to S3: {error_message}",
-                    error_code="S3_UPLOAD_ACCESS_DENIED",
+                    bucket=bucket,
+                    key=key,
                     context={
-                        "bucket": bucket,
-                        "key": key,
                         "content_hash": content_hash,
                         "kms_enabled": bool(self._kms_key_id),
                         "aws_error_code": error_code,

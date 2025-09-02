@@ -635,7 +635,11 @@ class E2ETestRunner:
                         "name": bucket_name,
                         "arn": f"arn:aws:s3:::{bucket_name}",
                     },
-                    "object": {"key": source_file["key"], "size": source_file["size"]},
+                    "object": {
+                        "key": source_file["key"], 
+                        "size": source_file["size"],
+                        "sequencer": f"test-sequencer-{uuid.uuid4().hex[:16]}"
+                    },
                 }
             }
             lambda_payload_records.append(record)

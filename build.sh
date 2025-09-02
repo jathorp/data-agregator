@@ -13,8 +13,7 @@ uv pip install \
   --python-platform "aarch64-manylinux2014" \
   --no-compile-bytecode \
   --no-installer-metadata \
-  'aws-lambda-powertools[tracer]'
-  # add any other deps here, e.g. 'cryptography>=42.0.0'
+  .
 
 echo "🔹 Copying application package…"
 cp -R src/data_aggregator build/

@@ -34,9 +34,28 @@ _UNICODE_FORMAT_CHAR_CATEGORIES: Set[str] = {"Cf"}
 
 # Windows reserved device names (case-insensitive check)
 _WINDOWS_DEVICE_NAMES: Set[str] = {
-    "CON", "PRN", "AUX", "NUL",
-    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "COM1",
+    "COM2",
+    "COM3",
+    "COM4",
+    "COM5",
+    "COM6",
+    "COM7",
+    "COM8",
+    "COM9",
+    "LPT1",
+    "LPT2",
+    "LPT3",
+    "LPT4",
+    "LPT5",
+    "LPT6",
+    "LPT7",
+    "LPT8",
+    "LPT9",
 }
 
 
@@ -101,7 +120,9 @@ def sanitize_s3_key(key: str) -> str:
             context={"key_type": type(key).__name__},
         )
     if not key:
-        raise ValidationError("S3 key cannot be empty.", error_code="INVALID_S3_KEY_FORMAT")
+        raise ValidationError(
+            "S3 key cannot be empty.", error_code="INVALID_S3_KEY_FORMAT"
+        )
 
     # -- Start Canonicalization --
     decoded_key = key
@@ -113,7 +134,7 @@ def sanitize_s3_key(key: str) -> str:
 
     try:
         # Use NFKC for aggressive compatibility normalization to catch more homoglyphs.
-        normalized_key = unicodedata.normalize('NFKC', decoded_key)
+        normalized_key = unicodedata.normalize("NFKC", decoded_key)
     except Exception:
         raise ValidationError(
             "S3 key contains invalid Unicode sequences.",
@@ -153,7 +174,7 @@ def sanitize_s3_key(key: str) -> str:
 
     # 3. PATH COMPONENT VALIDATION AND FINAL ASSEMBLY
     safe_components = []
-    for part in safe_key.split('/'):
+    for part in safe_key.split("/"):
         if part in {"", "."}:
             continue
         if part == "..":

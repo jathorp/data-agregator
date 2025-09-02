@@ -29,7 +29,7 @@ class AppConfig:
     spool_file_max_size_mb: int
     timeout_guard_threshold_seconds: int
     max_bundle_on_disk_mb: int
-    
+
     # --- Error Handling Configuration ---
     max_retries_per_record: int
     s3_operation_timeout_seconds: int
@@ -88,9 +88,13 @@ class AppConfig:
             if spool_file_max_size_mb <= 0:
                 raise ValueError("SPOOL_FILE_MAX_SIZE_MB must be a positive integer.")
 
-            timeout_guard_threshold_seconds = int(os.getenv("TIMEOUT_GUARD_THRESHOLD_SECONDS", "10"))
+            timeout_guard_threshold_seconds = int(
+                os.getenv("TIMEOUT_GUARD_THRESHOLD_SECONDS", "10")
+            )
             if timeout_guard_threshold_seconds <= 0:
-                raise ValueError("TIMEOUT_GUARD_THRESHOLD_SECONDS must be a positive integer.")
+                raise ValueError(
+                    "TIMEOUT_GUARD_THRESHOLD_SECONDS must be a positive integer."
+                )
 
             max_bundle_on_disk_mb = int(os.getenv("MAX_BUNDLE_ON_DISK_MB", "400"))
             if max_bundle_on_disk_mb <= 0:
@@ -107,21 +111,33 @@ class AppConfig:
             # --- Handle error handling configuration ---
             max_retries_per_record = int(os.getenv("MAX_RETRIES_PER_RECORD", "3"))
             if max_retries_per_record < 0:
-                raise ValueError("MAX_RETRIES_PER_RECORD must be a non-negative integer.")
+                raise ValueError(
+                    "MAX_RETRIES_PER_RECORD must be a non-negative integer."
+                )
 
-            s3_operation_timeout_seconds = int(os.getenv("S3_OPERATION_TIMEOUT_SECONDS", "30"))
+            s3_operation_timeout_seconds = int(
+                os.getenv("S3_OPERATION_TIMEOUT_SECONDS", "30")
+            )
             if s3_operation_timeout_seconds <= 0:
-                raise ValueError("S3_OPERATION_TIMEOUT_SECONDS must be a positive integer.")
+                raise ValueError(
+                    "S3_OPERATION_TIMEOUT_SECONDS must be a positive integer."
+                )
 
             error_sampling_rate = float(os.getenv("ERROR_SAMPLING_RATE", "1.0"))
             if not 0.0 <= error_sampling_rate <= 1.0:
                 raise ValueError("ERROR_SAMPLING_RATE must be between 0.0 and 1.0.")
 
-            enable_detailed_error_context = os.getenv("ENABLE_DETAILED_ERROR_CONTEXT", "true").lower() in ("true", "1", "yes", "on")
+            enable_detailed_error_context = os.getenv(
+                "ENABLE_DETAILED_ERROR_CONTEXT", "true"
+            ).lower() in ("true", "1", "yes", "on")
 
-            max_error_context_size_kb = int(os.getenv("MAX_ERROR_CONTEXT_SIZE_KB", "16"))
+            max_error_context_size_kb = int(
+                os.getenv("MAX_ERROR_CONTEXT_SIZE_KB", "16")
+            )
             if max_error_context_size_kb <= 0:
-                raise ValueError("MAX_ERROR_CONTEXT_SIZE_KB must be a positive integer.")
+                raise ValueError(
+                    "MAX_ERROR_CONTEXT_SIZE_KB must be a positive integer."
+                )
 
         except KeyError as e:
             raise ConfigurationError(

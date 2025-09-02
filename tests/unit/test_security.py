@@ -39,42 +39,45 @@ class TestSanitizeS3Key:
             ("foo/../../etc/passwd", "UNSAFE_S3_KEY_PATH"),
             ("../etc/passwd", "UNSAFE_S3_KEY_PATH"),
             ("folder/../secret.txt", "UNSAFE_S3_KEY_PATH"),
-
             # Size violation
             ("a" * 1025, "INVALID_S3_KEY_LENGTH"),
-
             # Character violations
             ("file\x00name.txt", "INVALID_S3_KEY_CHARACTER"),
             ("file\x1fname.txt", "INVALID_S3_KEY_CHARACTER"),
-            ("file\u200Bname.txt", "INVALID_S3_KEY_CHARACTER"),  # Zero-width space
-
+            ("file\u200bname.txt", "INVALID_S3_KEY_CHARACTER"),  # Zero-width space
             # Format violations
             ("", "INVALID_S3_KEY_FORMAT"),
-            (" folder/file.txt", "INVALID_S3_KEY_FORMAT"),  # Leading whitespace in component
-
+            (
+                " folder/file.txt",
+                "INVALID_S3_KEY_FORMAT",
+            ),  # Leading whitespace in component
             # Paths that resolve to empty
             (".", "UNSAFE_S3_KEY_PATH"),
             ("/", "UNSAFE_S3_KEY_PATH"),
             ("//", "UNSAFE_S3_KEY_PATH"),
-
             # Type violations
             (123, "INVALID_S3_KEY_TYPE"),
             (None, "INVALID_S3_KEY_TYPE"),
             ([], "INVALID_S3_KEY_TYPE"),
         ],
     )
-    def test_sanitize_s3_key_invalid_keys_parametrized(self, invalid_key, expected_error_code):
+    def test_sanitize_s3_key_invalid_keys_parametrized(
+        self, invalid_key, expected_error_code
+    ):
         """Test a variety of invalid S3 keys raise ValidationError with correct error codes."""
         with pytest.raises(ValidationError) as exc_info:
             sanitize_s3_key(invalid_key)
         assert exc_info.value.error_code == expected_error_code
 
-    @pytest.mark.parametrize("dangerous_path", [
-        "folder/../etc/passwd",
-        "../secret.txt",
-        "foo/../bar",
-        "../../etc/shadow",
-    ])
+    @pytest.mark.parametrize(
+        "dangerous_path",
+        [
+            "folder/../etc/passwd",
+            "../secret.txt",
+            "foo/../bar",
+            "../../etc/shadow",
+        ],
+    )
     def test_sanitize_s3_key_blocks_path_traversal(self, dangerous_path):
         """Ensure path traversal attacks are blocked."""
         with pytest.raises(ValidationError) as exc_info:
@@ -98,42 +101,68 @@ class TestSanitizeS3Key:
             sanitize_s3_key(multi_byte_over)
         assert exc_info.value.error_code == "INVALID_S3_KEY_LENGTH"
 
-    @pytest.mark.parametrize("invisible_char", [
-        "\u200B", "\u200C", "\u200D", "\uFEFF",  # Zero-width
-        "\u202E", "\u202D", "\u202C",  # Directional
-    ])
+    @pytest.mark.parametrize(
+        "invisible_char",
+        [
+            "\u200b",
+            "\u200c",
+            "\u200d",
+            "\ufeff",  # Zero-width
+            "\u202e",
+            "\u202d",
+            "\u202c",  # Directional
+        ],
+    )
     def test_sanitize_s3_key_blocks_unicode_format_chars(self, invisible_char):
         """Test that dangerous Unicode format characters are blocked."""
         with pytest.raises(ValidationError) as exc_info:
             sanitize_s3_key(f"file{invisible_char}name.txt")
         assert exc_info.value.error_code == "INVALID_S3_KEY_CHARACTER"
 
-    @pytest.mark.parametrize("whitespace_key", [
-        " filename.txt", "filename.txt ",
-        "folder/ file.txt", "folder /filename.txt",
-    ])
+    @pytest.mark.parametrize(
+        "whitespace_key",
+        [
+            " filename.txt",
+            "filename.txt ",
+            "folder/ file.txt",
+            "folder /filename.txt",
+        ],
+    )
     def test_sanitize_s3_key_blocks_leading_trailing_spaces(self, whitespace_key):
         """Test leading/trailing whitespace in components is blocked."""
         with pytest.raises(ValidationError) as exc_info:
             sanitize_s3_key(whitespace_key)
         assert exc_info.value.error_code == "INVALID_S3_KEY_FORMAT"
 
-    @pytest.mark.parametrize("device_name", [
-        "CON", "PRN", "AUX", "NUL", "COM1", "LPT1",
-        "con", "Con.txt", "folder/PRN",
-    ])
+    @pytest.mark.parametrize(
+        "device_name",
+        [
+            "CON",
+            "PRN",
+            "AUX",
+            "NUL",
+            "COM1",
+            "LPT1",
+            "con",
+            "Con.txt",
+            "folder/PRN",
+        ],
+    )
     def test_sanitize_s3_key_blocks_windows_device_names(self, device_name):
         """Test for Windows reserved device names."""
         with pytest.raises(ValidationError) as exc_info:
             sanitize_s3_key(device_name)
         assert exc_info.value.error_code == "UNSAFE_S3_KEY_PATH"
 
-    @pytest.mark.parametrize("mixed_attack", [
-        "folder\\..\\..\\etc\\passwd",
-        "folder%2F..%2F..%2Fetc%2Fpasswd",
-        "folder%252F..%252F..%252Fetc%252Fpasswd",  # Double encoded
-        "folder/\uFF0E\uFF0E/etc/passwd",  # Fullwidth dots (will be normalized)
-    ])
+    @pytest.mark.parametrize(
+        "mixed_attack",
+        [
+            "folder\\..\\..\\etc\\passwd",
+            "folder%2F..%2F..%2Fetc%2Fpasswd",
+            "folder%252F..%252F..%252Fetc%252Fpasswd",  # Double encoded
+            "folder/\uff0e\uff0e/etc/passwd",  # Fullwidth dots (will be normalized)
+        ],
+    )
     def test_sanitize_s3_key_blocks_mixed_traversal_attempts(self, mixed_attack):
         """Test for sophisticated path traversal attacks."""
         with pytest.raises(ValidationError) as exc_info:

@@ -154,6 +154,125 @@ uv run mypy src/data_aggregator/
 uv run bandit -r src/
 ```
 
+### Enhanced Error Handling System
+
+The data aggregator implements a comprehensive error handling system designed for robust production operation with proper retry logic and observability.
+
+#### Exception Hierarchy
+
+The system uses a structured exception hierarchy that categorizes errors by their retry characteristics:
+
+```python
+DataAggregatorError (base)
+├── RetryableError (can be retried)
+│   ├── S3ThrottlingError          # S3 rate limiting
+│   ├── S3TimeoutError             # S3 operation timeouts
+│   ├── BundleCreationError        # Temporary bundle creation issues
+│   ├── DiskSpaceError             # Insufficient disk space
+│   ├── MemoryLimitError           # Memory limit exceeded
+│   ├── BundlingTimeoutError       # Lambda timeout approaching
+│   ├── BatchTooLargeError         # Batch exceeds size limits
+│   └── TransientDynamoError       # Temporary DynamoDB issues
+└── NonRetryableError (should not be retried)
+    ├── ValidationError
+    │   ├── InvalidS3EventError    # Malformed S3 events
+    │   └── InvalidConfigurationError  # Invalid config values
+    ├── S3AccessDeniedError        # Permission denied
+    ├── S3ObjectNotFoundError      # Missing S3 objects
+    └── ConfigurationError         # Application config errors
+```
+
+#### Error Context and Structured Logging
+
+All exceptions include structured context for debugging and monitoring:
+
+```python
+# Example: S3 timeout with rich context
+error = S3TimeoutError(
+    operation="GetObject",
+    timeout_seconds=30.0,
+    correlation_id="req-123",
+    context={"bucket": "landing-bucket", "key": "file.txt"}
+)
+
+# Structured error context for logging
+context = error.to_dict()
+# {
+#     "error_type": "S3TimeoutError",
+#     "error_code": "S3_TIMEOUT", 
+#     "message": "S3 operation timed out after 30.0s: GetObject",
+#     "context": {"operation": "GetObject", "timeout_seconds": 30.0, "bucket": "landing-bucket", "key": "file.txt"},
+#     "correlation_id": "req-123",
+#     "retryable": true
+# }
+```
+
+#### SQS Integration and Retry Logic
+
+The error handling system integrates with SQS batch processing:
+
+- **Retryable Errors**: Messages are returned to SQS for automatic retry with exponential backoff
+- **Non-Retryable Errors**: Messages are immediately failed to prevent infinite retry loops
+- **Partial Batch Failures**: Only failed messages are retried, successful ones are not reprocessed
+
+#### Configuration Options
+
+Error handling behavior is configurable via environment variables:
+
+```bash
+# Retry configuration
+MAX_RETRIES_PER_RECORD=3
+S3_OPERATION_TIMEOUT_SECONDS=30
+
+# Error sampling and context
+ERROR_SAMPLING_RATE=0.1
+ENABLE_DETAILED_ERROR_CONTEXT=true
+MAX_ERROR_CONTEXT_SIZE_KB=10
+
+# Resource limits
+SPOOL_FILE_MAX_SIZE_MB=100
+MAX_BUNDLE_ON_DISK_MB=200
+TIMEOUT_GUARD_THRESHOLD_SECONDS=30
+```
+
+#### Monitoring and Alerting
+
+The system provides comprehensive error metrics:
+
+- **Error Type Distribution**: Track frequency of different error types
+- **Retry Patterns**: Monitor retry success rates and backoff behavior  
+- **Resource Utilization**: Track memory and disk usage patterns
+- **Performance Metrics**: Measure processing latency and throughput
+
+#### Error Handling Best Practices
+
+When adding new functionality:
+
+1. **Use Specific Exceptions**: Choose the most specific exception type available
+2. **Include Rich Context**: Add relevant debugging information to error context
+3. **Consider Retry Semantics**: Inherit from `RetryableError` or `NonRetryableError` appropriately
+4. **Test Error Paths**: Include comprehensive error handling tests
+5. **Monitor Error Patterns**: Add appropriate CloudWatch metrics for new error types
+
+#### Utility Functions
+
+The system provides utility functions for error handling:
+
+```python
+from data_aggregator.exceptions import is_retryable_error, get_error_context
+
+# Check if an error should be retried
+if is_retryable_error(exception):
+    # Return message to SQS for retry
+    return {"batchItemFailures": [{"itemIdentifier": message_id}]}
+
+# Extract structured context for logging
+error_context = get_error_context(exception)
+logger.error("Processing failed", extra=error_context)
+```
+
+For detailed implementation examples, see the comprehensive test suite in `tests/unit/test_exceptions.py`.
+
 ---
 
 ## 🏗️ Infrastructure Management

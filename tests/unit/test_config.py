@@ -30,6 +30,12 @@ def mock_valid_env(monkeypatch):
     monkeypatch.setenv("SPOOL_FILE_MAX_SIZE_MB", "32")
     monkeypatch.setenv("TIMEOUT_GUARD_THRESHOLD_SECONDS", "5")
     monkeypatch.setenv("MAX_BUNDLE_ON_DISK_MB", "200")
+    # Set error handling configuration fields
+    monkeypatch.setenv("MAX_RETRIES_PER_RECORD", "5")
+    monkeypatch.setenv("S3_OPERATION_TIMEOUT_SECONDS", "60")
+    monkeypatch.setenv("ERROR_SAMPLING_RATE", "0.8")
+    monkeypatch.setenv("ENABLE_DETAILED_ERROR_CONTEXT", "false")
+    monkeypatch.setenv("MAX_ERROR_CONTEXT_SIZE_KB", "32")
 
 
 def test_get_config_happy_path(mock_valid_env):
@@ -50,10 +56,17 @@ def test_get_config_happy_path(mock_valid_env):
     assert config.spool_file_max_size_mb == 32
     assert config.timeout_guard_threshold_seconds == 5
     assert config.max_bundle_on_disk_mb == 200
+    # Test error handling configuration fields
+    assert config.max_retries_per_record == 5
+    assert config.s3_operation_timeout_seconds == 60
+    assert config.error_sampling_rate == 0.8
+    assert not config.enable_detailed_error_context
+    assert config.max_error_context_size_kb == 32
     # Test derived properties
     assert config.spool_file_max_size_bytes == 32 * 1024 * 1024
     assert config.timeout_guard_threshold_ms == 5 * 1000
     assert config.max_bundle_on_disk_bytes == 200 * 1024 * 1024
+    assert config.max_error_context_size_bytes == 32 * 1024
 
 
 def test_get_config_uses_defaults(monkeypatch):
@@ -71,6 +84,12 @@ def test_get_config_uses_defaults(monkeypatch):
     monkeypatch.delenv("SPOOL_FILE_MAX_SIZE_MB", raising=False)
     monkeypatch.delenv("TIMEOUT_GUARD_THRESHOLD_SECONDS", raising=False)
     monkeypatch.delenv("MAX_BUNDLE_ON_DISK_MB", raising=False)
+    # Ensure error handling configuration variables are not set
+    monkeypatch.delenv("MAX_RETRIES_PER_RECORD", raising=False)
+    monkeypatch.delenv("S3_OPERATION_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("ERROR_SAMPLING_RATE", raising=False)
+    monkeypatch.delenv("ENABLE_DETAILED_ERROR_CONTEXT", raising=False)
+    monkeypatch.delenv("MAX_ERROR_CONTEXT_SIZE_KB", raising=False)
 
     # ACT
     config = get_config()
@@ -83,10 +102,17 @@ def test_get_config_uses_defaults(monkeypatch):
     assert config.spool_file_max_size_mb == 64  # Default
     assert config.timeout_guard_threshold_seconds == 10  # Default
     assert config.max_bundle_on_disk_mb == 400  # Default
+    # Test error handling configuration field defaults
+    assert config.max_retries_per_record == 3  # Default
+    assert config.s3_operation_timeout_seconds == 30  # Default
+    assert config.error_sampling_rate == 1.0  # Default
+    assert config.enable_detailed_error_context  # Default
+    assert config.max_error_context_size_kb == 16  # Default
     # Test derived properties with defaults
     assert config.spool_file_max_size_bytes == 64 * 1024 * 1024
     assert config.timeout_guard_threshold_ms == 10 * 1000
     assert config.max_bundle_on_disk_bytes == 400 * 1024 * 1024
+    assert config.max_error_context_size_bytes == 16 * 1024
 
 
 def test_get_config_missing_required_env_var(monkeypatch):

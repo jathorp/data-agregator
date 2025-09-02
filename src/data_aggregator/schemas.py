@@ -1,40 +1,83 @@
-# src/data_aggregator/schemas.py
+# In src/data_aggregator/schemas.py
 
-"""
-Shared data schemas and type definitions for the Data Aggregator service.
+from typing import TypedDict
+from pydantic import BaseModel, Field, field_validator, PrivateAttr
 
-This module centralizes the data structures used across the application, primarily
-for parsing the S3 event notification record. Using a central schema file:
-  - Improves type safety and enables static analysis.
-  - Prevents circular import errors between modules.
-  - Serves as clear documentation for the expected data shapes.
-"""
+from .security import sanitize_s3_key
+from .exceptions import ValidationError as CustomValidationError
 
-from typing import TypedDict, NotRequired
+# --- Static Type Hinting (for mypy and IDEs) ---
 
 
-class S3Object(TypedDict):
-    """Represents the 'object' portion of an S3 event record."""
-
-    key: str
-    size: int
-    versionId: NotRequired[str]
-
-
-class S3Bucket(TypedDict):
-    """Represents the 'bucket' portion of an S3 event record."""
-
+class S3BucketDict(TypedDict):
     name: str
 
 
-class S3Entity(TypedDict):
-    """Represents the 's3' entity containing bucket and object details."""
+class S3ObjectDict(TypedDict):
+    key: str
+    size: int
+    versionId: str | None
+    sequencer: str
 
-    bucket: S3Bucket
-    object: S3Object
+
+class S3DataDict(TypedDict):
+    bucket: S3BucketDict
+    object: S3ObjectDict
 
 
 class S3EventRecord(TypedDict):
-    """Represents the top-level structure of a single S3 event record."""
+    """
+    A TypedDict representing the structure of a single S3 event record.
+    Used for static type analysis throughout the application.
+    """
 
-    s3: S3Entity
+    s3: S3DataDict
+
+
+# --- Runtime Validation (using Pydantic) ---
+
+
+class S3BucketModel(BaseModel):
+    name: str = Field(..., min_length=1)
+
+
+class S3ObjectModel(BaseModel):
+    # This will hold the original, unmodified key
+    _original_key: str = PrivateAttr()
+
+    key: str = Field(..., min_length=1)
+    size: int
+    version_id: str | None = Field(None, alias="versionId")
+    sequencer: str
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        # Store the original key before it gets sanitized
+        self._original_key = data.get("key", "")
+
+    # This validator now modifies the 'key' attribute, but the original
+    # is safely stored in '_original_key'.
+    @field_validator("key")
+    @classmethod
+    def validate_s3_key_security(cls, value: str) -> str:
+        try:
+            return sanitize_s3_key(value)
+        except CustomValidationError as e:
+            raise ValueError(str(e))
+
+    @property
+    def original_key(self) -> str:
+        return self._original_key
+
+
+class S3DataModel(BaseModel):
+    bucket: S3BucketModel
+    object: S3ObjectModel
+
+
+class S3EventNotificationRecord(BaseModel):
+    """
+    Pydantic model for runtime parsing and validation of an S3 event record.
+    """
+
+    s3: S3DataModel

@@ -14,13 +14,13 @@ responsible for:
 6.  Implementing robust partial batch failure handling.
 """
 
-import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any, cast
 from urllib.parse import quote
 
 import boto3
+import pydantic
 from aws_lambda_powertools import Logger, Metrics, Tracer
 from aws_lambda_powertools.metrics import MetricUnit
 from aws_lambda_powertools.utilities.batch.types import (
@@ -42,7 +42,18 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from .clients import S3Client
 from .config import get_config
 from .core import process_and_stage_batch
-from .schemas import S3EventRecord
+from .exceptions import (
+    BundleCreationError,
+    DataAggregatorError,
+    DiskSpaceError,
+    MemoryLimitError,
+    S3AccessDeniedError,
+    S3ThrottlingError,
+    S3TimeoutError,
+    get_error_context,
+    is_retryable_error,
+)
+from .schemas import S3EventNotificationRecord
 
 # --- Global & Reusable Components ---
 CONFIG = get_config()
@@ -77,14 +88,19 @@ idempotency_persistence_layer.configure(config=idempotency_config)
 # ───────────────────────────────────────────────────────────────
 # Helper: collision‑proof idempotency key
 # ───────────────────────────────────────────────────────────────
-def _make_idempotency_key(bucket: str, key: str, version: str | None) -> str:
+def _make_idempotency_key(key: str, version: str | None, sequencer: str) -> str:
     """
-    Deterministic, collision‑proof key:
-      1. Compact JSON → {"b":bucket,"k":key,"v":version}
-      2. URL‑encode so it’s pure ASCII and control‑char‑free.
+    Deterministic, collision-proof key based on object key, version, and sequencer.
+    This intentionally excludes the bucket to de-duplicate the same file
+    if it appears in different buckets.
+
+    For versioned buckets, versionId provides uniqueness.
+    For unversioned buckets, the sequencer guarantees uniqueness for each modification.
     """
-    raw = json.dumps({"b": bucket, "k": key, "v": version or ""}, separators=(",", ":"))
-    return quote(raw, safe="")  # always ≤ ~1 KB so Powertools is happy
+    # Use versionId if it exists, otherwise fall back to the sequencer.
+    unique_part = version or sequencer
+    raw = json.dumps({"k": key, "u": unique_part}, separators=(",", ":"))
+    return quote(raw, safe="")
 
 
 @idempotent_function(
@@ -113,22 +129,29 @@ def build_partial_failure_response(
 
 
 def _get_message_ids_for_s3_records(
-    s3_records: list[S3EventRecord],
+    s3_records: list[S3EventNotificationRecord],
     record_to_message_id_map: dict[str, set[str]],
 ) -> set[str]:
     """Finds all unique SQS message IDs for a given list of S3 records."""
     message_ids: set[str] = set()
     for record in s3_records:
-        s3_key = record["s3"]["object"]["key"]
-        s3_version = record["s3"]["object"].get("versionId")
-        unique_record_key = f"{s3_key}#{s3_version}" if s3_version else s3_key
+        # Reconstruct the key in exactly the same way to ensure a match.
+        original_s3_key = record.s3.object.original_key
+        s3_version = record.s3.object.version_id
+        s3_sequencer = record.s3.object.sequencer
+
+        unique_record_key = _make_idempotency_key(
+            original_s3_key, s3_version, s3_sequencer
+        )
+
         ids_for_record = record_to_message_id_map.get(unique_record_key, set())
         message_ids.update(ids_for_record)
+
     return message_ids
 
 
 def _process_valid_records(
-    records_to_process: list[S3EventRecord],
+    records_to_process: list[S3EventNotificationRecord],
     record_to_message_id_map: dict[str, set[str]],
     context: LambdaContext,
 ) -> set[str]:
@@ -136,40 +159,125 @@ def _process_valid_records(
     now = datetime.now(timezone.utc)
     bundle_key = f"{now.strftime('%Y/%m/%d/%H')}/bundle-{context.aws_request_id}.tar.gz"
 
-    _, _, remaining_records = process_and_stage_batch(
-        records=records_to_process,
-        s3_client=s3_client,
-        distribution_bucket=CONFIG.distribution_bucket,
-        bundle_key=bundle_key,
-        context=context,
-        config=CONFIG,
-    )
+    try:
+        _, _, remaining_records = process_and_stage_batch(
+            records=records_to_process,
+            s3_client=s3_client,
+            distribution_bucket=CONFIG.distribution_bucket,
+            bundle_key=bundle_key,
+            context=context,
+            config=CONFIG,
+        )
 
-    processed_count = len(records_to_process) - len(remaining_records)
-    metrics.add_metric(
-        name="ProcessedRecordsInBundle", unit=MetricUnit.Count, value=processed_count
-    )
+        processed_count = len(records_to_process) - len(remaining_records)
+        metrics.add_metric(
+            name="ProcessedRecordsInBundle",
+            unit=MetricUnit.Count,
+            value=processed_count,
+        )
 
-    if not remaining_records:
+        if not remaining_records:
+            return set()
+
+        metrics.add_metric(
+            name="RemainingRecordsForRetry",
+            unit=MetricUnit.Count,
+            value=len(remaining_records),
+        )
+        logger.warning(
+            "Some records were not processed and will be retried.",
+            extra={
+                "remaining_count": len(remaining_records),
+                "example_keys": [
+                    r.s3.object.original_key for r in remaining_records[:3]
+                ],
+            },
+        )
+        return _get_message_ids_for_s3_records(
+            remaining_records, record_to_message_id_map
+        )
+
+    except (MemoryLimitError, DiskSpaceError) as e:
+        # Critical resource errors - fail all records for retry
+        metrics.add_metric(
+            name="CriticalResourceErrors", unit=MetricUnit.Count, value=1
+        )
+        logger.error(
+            f"Critical resource error during batch processing: {e}",
+            extra=get_error_context(e),
+        )
+        # Return all message IDs for retry
+        return _get_message_ids_for_s3_records(
+            records_to_process, record_to_message_id_map
+        )
+
+    except BundleCreationError as e:
+        # Bundle creation errors - determine if retryable
+        if is_retryable_error(e):
+            metrics.add_metric(
+                name="RetryableBundleErrors", unit=MetricUnit.Count, value=1
+            )
+            logger.warning(
+                f"Retryable bundle creation error: {e}", extra=get_error_context(e)
+            )
+            # Return all message IDs for retry
+            return _get_message_ids_for_s3_records(
+                records_to_process, record_to_message_id_map
+            )
+        else:
+            metrics.add_metric(
+                name="NonRetryableBundleErrors", unit=MetricUnit.Count, value=1
+            )
+            logger.error(
+                f"Non-retryable bundle creation error: {e}", extra=get_error_context(e)
+            )
+            # Don't retry non-retryable errors
+            return set()
+
+    except (S3ThrottlingError, S3TimeoutError) as e:
+        # Retryable S3 errors
+        metrics.add_metric(name="RetryableS3Errors", unit=MetricUnit.Count, value=1)
+        logger.warning(
+            f"Retryable S3 error during batch processing: {e}",
+            extra=get_error_context(e),
+        )
+        # Return all message IDs for retry
+        return _get_message_ids_for_s3_records(
+            records_to_process, record_to_message_id_map
+        )
+
+    except S3AccessDeniedError as e:
+        # Non-retryable errors
+        metrics.add_metric(name="NonRetryableErrors", unit=MetricUnit.Count, value=1)
+        logger.error(
+            f"Non-retryable error during batch processing: {e}",
+            extra=get_error_context(e),
+        )
+        # Don't retry non-retryable errors
         return set()
 
-    metrics.add_metric(
-        name="RemainingRecordsForRetry",
-        unit=MetricUnit.Count,
-        value=len(remaining_records),
-    )
-    logger.warning(
-        "Some records were not processed due to constraints and will be retried.",
-        extra={
-            "remaining_count": len(remaining_records),
-            "example_keys": [r["s3"]["object"]["key"] for r in remaining_records[:3]],
-        },
-    )
+    except DataAggregatorError as e:
+        error_details = get_error_context(e)
+        retryable = error_details["retryable"]
 
-    return _get_message_ids_for_s3_records(remaining_records, record_to_message_id_map)
+        metrics.add_metric(
+            name="RetryableAppErrors" if retryable else "NonRetryableAppErrors",
+            unit=MetricUnit.Count,
+            value=1,
+        )
+
+        log_level = logger.warning if retryable else logger.error
+        log_level(
+            f"Application error during batch processing: {e}", extra=error_details
+        )
+
+        if retryable:
+            return _get_message_ids_for_s3_records(...)
+        else:
+            return set()
 
 
-@logger.inject_lambda_context(log_event=True, correlation_id_path="aws_request_id")
+@logger.inject_lambda_context(log_event=True)
 @tracer.capture_lambda_handler
 @metrics.log_metrics(capture_cold_start_metric=True)
 def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
@@ -186,7 +294,23 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
             logger.error("Test-only bundling invoke received in production.")
             raise ValueError("e2e_test_direct_invoke not allowed in this environment")
         logger.info("Direct invocation test for bundling detected.")
-        records_to_process = event.get("records", [])
+        raw_records = event.get("records", [])
+
+        # Parse the raw test records into Pydantic models ---
+        try:
+            # Use a list comprehension to parse each raw dictionary
+            records_to_process = [
+                S3EventNotificationRecord.model_validate(r) for r in raw_records
+            ]
+        except pydantic.ValidationError as e:
+            logger.error(
+                "Invalid records provided in direct invocation test.",
+                extra={"errors": e.errors()},
+            )
+            # For a test invocation, raising an error is appropriate
+            raise ValueError("Invalid test data provided") from e
+
+        # Now we are passing the correct type to the function
         _process_valid_records(records_to_process, {}, context)
         return {"batchItemFailures": []}
 
@@ -199,7 +323,7 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
             return {"batchItemFailures": []}
 
         # --- Setup tracking variables ---
-        records_to_process: list[S3EventRecord] = []
+        records_to_process: list[S3EventNotificationRecord] = []
         failed_message_ids: set[str] = set()
         record_to_message_id_map: dict[str, set[str]] = {}
 
@@ -222,30 +346,38 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
             for s3_record in s3_records:
                 idempotency_key = ""
                 try:
-                    s3_object = s3_record["s3"]["object"]
-                    s3_key = s3_object["key"]
-                    s3_version = s3_object.get("versionId")
-                    unique_record_key = (
-                        f"{s3_key}#{s3_version}" if s3_version else s3_key
+                    # --- 1. PARSE & VALIDATE ---
+                    # This validates structure, types, and runs our security sanitizer.
+                    parsed_record = S3EventNotificationRecord.model_validate(s3_record)
+
+                    # --- 2. GENERATE THE UNIQUE IDEMPOTENCY KEY ---
+                    # Extract all necessary components from the validated model.
+                    original_s3_key = parsed_record.s3.object.original_key
+                    s3_version = parsed_record.s3.object.version_id
+                    s3_sequencer = parsed_record.s3.object.sequencer
+
+                    # This key is now the single source of truth for this record's uniqueness.
+                    idempotency_key = _make_idempotency_key(
+                        original_s3_key, s3_version, s3_sequencer
                     )
 
-                    record_to_message_id_map.setdefault(unique_record_key, set()).add(
+                    # --- 3. PROCEED WITH PROCESSING ---
+                    # Use the idempotency_key itself as the key for our lookup map.
+                    # This ensures the logic is perfectly consistent.
+                    record_to_message_id_map.setdefault(idempotency_key, set()).add(
                         message_id
                     )
 
-                    bucket_name = s3_record["s3"]["bucket"]["name"]
-                    idempotency_key = _make_idempotency_key(
-                        bucket_name, s3_key, s3_version
-                    )
-
-                    # The payload for idempotency should contain everything the key is based on
+                    # The idempotency payload requires the original s3_object dict
+                    # and the unique idempotency key we just generated.
                     payload = {
                         "idempotency_key": idempotency_key,
-                        "s3_object": s3_object,
+                        "s3_object": s3_record["s3"]["object"],
                     }
                     _process_record_idempotently(data=payload)
 
-                    records_to_process.append(s3_record)
+                    # Append the parsed Pydantic object for downstream processing.
+                    records_to_process.append(parsed_record)
 
                 except IdempotencyItemAlreadyExistsError:
                     metrics.add_metric(
@@ -255,10 +387,29 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
                         "Skipping duplicate S3 object.",
                         extra={"idempotency_key": idempotency_key},
                     )
-                except Exception:
+                # Catch Pydantic's validation error instead of our custom ones
+                except pydantic.ValidationError as e:
+                    metrics.add_metric(
+                        name="InvalidS3Records", unit=MetricUnit.Count, value=1
+                    )
+                    logger.warning(
+                        "Invalid S3 record failed validation.",
+                        extra={
+                            "messageId": message_id,
+                            "validation_errors": e.errors(),
+                        },
+                    )
+                    failed_message_ids.add(message_id)
+                except Exception as e:
+                    metrics.add_metric(
+                        name="UnexpectedRecordErrors", unit=MetricUnit.Count, value=1
+                    )
                     logger.exception(
-                        "Failed to process an S3 record.",
-                        extra={"messageId": message_id},
+                        "Unexpected error processing S3 record.",
+                        extra={
+                            "messageId": message_id,
+                            "error_type": type(e).__name__,
+                        },
                     )
                     failed_message_ids.add(message_id)
 

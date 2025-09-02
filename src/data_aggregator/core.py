@@ -14,45 +14,37 @@ operation within a memory-constrained AWS Lambda environment.
 import hashlib
 import io
 import logging
-import os
-import re
+import shutil
 import tarfile
 from contextlib import closing, contextmanager
 from tempfile import SpooledTemporaryFile
-from typing import BinaryIO, Iterator, List, Optional, Tuple, cast
+from typing import BinaryIO, Iterator, cast
 
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from .clients import S3Client
 from .config import AppConfig
-from .exceptions import ObjectNotFoundError
-from .schemas import S3EventRecord
+from .exceptions import (
+    BundleCreationError,
+    DiskSpaceError,
+    MemoryLimitError,
+    ObjectNotFoundError,
+    S3AccessDeniedError,
+    S3ObjectNotFoundError,
+    S3ThrottlingError,
+    S3TimeoutError,
+)
+from .schemas import S3EventNotificationRecord
 
 logger = logging.getLogger(__name__)
 
 
 # --- Helpers ---
-def _sanitize_s3_key(key: str) -> Optional[str]:
-    """Return a safe, relative POSIX path or None if the key is disallowed."""
-    try:
-        if any(ord(c) < 0x1F for c in key) or len(key.encode("utf-8")) > 1024:
-            return None
-        key_no_drive = re.sub(r"^[a-zA-Z]:", "", key)
-        path_with_fwd_slashes = key_no_drive.replace("\\", "/")
-        normalized_path = os.path.normpath(path_with_fwd_slashes)
-        safe_key = normalized_path.lstrip("/")
-        if safe_key.startswith("..") or safe_key in {"", "."}:
-            return None
-        return safe_key
-    except TypeError:
-        return None
-
-
 def _buffer_and_validate(
     stream: BinaryIO,
     expected_size: int,
     spool_threshold: int,
-) -> Optional[Tuple[BinaryIO, int]]:
+) -> tuple[BinaryIO, int] | None:
     """
     Read *stream* into a SpooledTemporaryFile (in-RAM up to *spool_threshold*,
     then /tmp on disk) while counting bytes.
@@ -112,8 +104,12 @@ class HashingFileWrapper(io.BufferedIOBase):
 # --- Core Bundling Routine ---
 @contextmanager
 def create_tar_gz_bundle_stream(
-    s3_client: S3Client, records: List[S3EventRecord], context: LambdaContext, config: AppConfig
-) -> Iterator[Tuple[BinaryIO, str, List[S3EventRecord]]]:
+    s3_client: S3Client,
+    # --- REFACTOR ---: The function now expects a list of Pydantic models.
+    records: list[S3EventNotificationRecord],
+    context: LambdaContext,
+    config: AppConfig,
+) -> Iterator[tuple[BinaryIO, str, list[S3EventNotificationRecord]]]:
     """
     Stream-creates a compressed tarball from S3 objects, stopping gracefully
     on timeout or disk space constraints. Catches errors for individual files.
@@ -121,11 +117,13 @@ def create_tar_gz_bundle_stream(
     Yields the bundle stream, its hash, and a list of the records that were
     successfully processed into the bundle.
     """
-    output_spool_file: BinaryIO = SpooledTemporaryFile(  # type: ignore[assignment]
-        max_size=config.spool_file_max_size_bytes, mode="w+b"
+    output_spool_file: BinaryIO = cast(
+        BinaryIO,
+        SpooledTemporaryFile(max_size=config.spool_file_max_size_bytes, mode="w+b"),
     )
     hashing_writer = HashingFileWrapper(output_spool_file)
-    processed_records: List[S3EventRecord] = []
+    # --- REFACTOR ---: The list of processed records now also contains Pydantic models.
+    processed_records: list[S3EventNotificationRecord] = []
     bytes_written = 0
 
     try:
@@ -137,62 +135,59 @@ def create_tar_gz_bundle_stream(
             logger.debug(f"Starting to process a batch of {len(records)} records.")
 
             for i, record in enumerate(records):
-                # --- START OF THE TRY BLOCK FOR A SINGLE RECORD ---
+                # --- REFACTOR ---: Access data via attributes from the trusted Pydantic model.
+                # The schema change provides both the original key (for S3 fetch) and
+                # the sanitized key (for the tarball archive name).
+                bucket = record.s3.bucket.name
+                original_key_to_fetch = record.s3.object.original_key
+                safe_key_for_tarball = record.s3.object.key
+                metadata_size = record.s3.object.size
+
                 try:
-                    # 1. Gracefully stop if nearing timeout
+                    # Graceful termination checks (logic unchanged)
                     if (
                         context.get_remaining_time_in_millis()
                         < config.timeout_guard_threshold_ms
                     ):
                         logger.warning("Timeout threshold reached. Finalizing bundle.")
                         break
-
-                    metadata_size = record["s3"]["object"]["size"]
-
-                    # 2. Gracefully stop if predicted disk usage is too high
-                    if (bytes_written + metadata_size) > config.max_bundle_on_disk_bytes:
+                    if (
+                        bytes_written + metadata_size
+                    ) > config.max_bundle_on_disk_bytes:
                         logger.warning(
                             "Predicted disk usage exceeds limit. Finalizing bundle."
                         )
                         break
 
-                    original_key = record["s3"]["object"]["key"]
-                    safe_key = _sanitize_s3_key(original_key)
-                    if safe_key is None:
-                        logger.warning(
-                            "Skipping invalid S3 key.", extra={"key": original_key}
-                        )
-                        continue
-
-                    bucket = record["s3"]["bucket"]["name"]
-
-                    # 3. Decide how to handle the file based on its size
+                    # File handling logic (unchanged, but uses new variables)
                     if metadata_size < config.spool_file_max_size_bytes:
-                        # Small file: buffer first to validate size
-                        stream = s3_client.get_file_content_stream(bucket, original_key)
+                        stream = s3_client.get_file_content_stream(
+                            bucket, original_key_to_fetch
+                        )
                         with closing(stream):
-                            buffered = _buffer_and_validate(stream, metadata_size, config.spool_file_max_size_bytes)
+                            buffered = _buffer_and_validate(
+                                stream, metadata_size, config.spool_file_max_size_bytes
+                            )
 
                         if buffered is None:
                             logger.warning(
-                                "Size mismatch between S3 metadata and actual object. Skipping.",
-                                extra={"key": original_key},
+                                "Size mismatch. Skipping.",
+                                extra={"key": original_key_to_fetch},
                             )
                             continue
                         fileobj_for_tarball, actual_size = buffered
                     else:
-                        # Large file: stream directly to conserve disk space
                         logger.debug(
-                            "Streaming large file directly to tarball.",
-                            extra={"key": original_key},
+                            "Streaming large file.",
+                            extra={"key": original_key_to_fetch},
                         )
                         fileobj_for_tarball = s3_client.get_file_content_stream(
-                            bucket, original_key
+                            bucket, original_key_to_fetch
                         )
                         actual_size = metadata_size
 
-                    # 4. Build tar header and add the file
-                    tarinfo = tarfile.TarInfo(name=safe_key)
+                    # Tarball entry creation (uses the sanitized key for the name)
+                    tarinfo = tarfile.TarInfo(name=safe_key_for_tarball)
                     tarinfo.size = actual_size
                     tarinfo.mtime = 0
                     tarinfo.uid = tarinfo.gid = 0
@@ -201,38 +196,83 @@ def create_tar_gz_bundle_stream(
                     with closing(fileobj_for_tarball):
                         tar.addfile(tarinfo, fileobj=fileobj_for_tarball)
 
-                    # 5. On success, update tracking variables
                     processed_records.append(record)
                     bytes_written += ((actual_size + 511) // 512) * 512
 
-                # --- START OF THE EXCEPTION HANDLING BLOCK ---
-                except ObjectNotFoundError:
-                    # This gracefully handles the case where the S3 object was deleted
-                    # between the event notification and this processing step.
+                # The 'except ValidationError' block is completely removed as this
+                # validation is now handled upstream by the handler.
+                except (S3ObjectNotFoundError, ObjectNotFoundError):
                     logger.debug(
-                        "S3 object for record not found, it may have been deleted. Skipping.",
-                        extra={"key": record["s3"]["object"]["key"]},
+                        "S3 object not found. Skipping.",
+                        extra={"key": original_key_to_fetch},
                     )
-                    continue  # Move to the next record in the batch
+                    continue
+                except S3AccessDeniedError as e:
+                    logger.warning(
+                        f"Access denied for S3 object: {e}",
+                        extra={"key": original_key_to_fetch},
+                    )
+                    continue
+                except (S3ThrottlingError, S3TimeoutError) as e:
+                    logger.warning(
+                        f"Retryable S3 error for object: {e}",
+                        extra={"key": original_key_to_fetch},
+                    )
+                    continue
+                except MemoryError:
+                    raise MemoryLimitError(
+                        "Insufficient memory", context={"key": original_key_to_fetch}
+                    )
 
+                except OSError as e:
+                    if e.errno == 28:  # No space left on device
+                        try:
+                            disk_usage = shutil.disk_usage("/tmp")
+                            available_bytes = disk_usage.free
+                        except Exception:
+                            available_bytes = -1
+
+                        # Use the size of the file we failed on as a reasonable
+                        # estimate for the required bytes.
+                        required_bytes_estimate = metadata_size
+
+                        raise DiskSpaceError(
+                            # Positional arguments for the constructor
+                            required_bytes=required_bytes_estimate,
+                            available_bytes=available_bytes,
+                            # Keyword arguments for the base class (**kwargs)
+                            context={
+                                "key": original_key_to_fetch,
+                                "file_size": metadata_size,
+                                "bytes_written_to_bundle": bytes_written,
+                            },
+                        ) from e
+                    else:
+                        logger.warning(
+                            f"OS error while processing file: {e}",
+                            extra={
+                                "key": original_key_to_fetch,
+                                "errno": e.errno,
+                                "strerror": e.strerror,
+                            },
+                        )
+                        continue
+
+                except tarfile.TarError as e:
+                    raise BundleCreationError(
+                        "Failed to add file to tarball",
+                        context={"key": original_key_to_fetch},
+                    ) from e
                 except Exception:
-                    # This is a generic catch-all for any other unexpected error
-                    # that occurs while processing a single file.
-                    key_for_logging = (
-                        record.get("s3", {}).get("object", {}).get("key", "unknown")
-                    )
                     logger.exception(
-                        "An unexpected error occurred when adding a file to the tarball. Skipping.",
-                        extra={"key": key_for_logging},
+                        "Unexpected error adding file. Skipping.",
+                        extra={"key": original_key_to_fetch},
                     )
-                    continue  # Also move to the next record
-                # --- END OF THE EXCEPTION HANDLING BLOCK ---
+                    continue
 
-        # 6. Finalize and yield results
         logger.info(
-            f"Finished processing batch. Added {len(processed_records)} records to bundle."
+            f"Finished processing batch. Added {len(processed_records)} records."
         )
-
         hashing_writer.flush()
         sha256_hash = hashing_writer.hexdigest()
         output_spool_file.seek(0)
@@ -244,44 +284,60 @@ def create_tar_gz_bundle_stream(
 
 # --- High-Level Orchestrator ---
 def process_and_stage_batch(
-    records: List[S3EventRecord],
+    # --- REFACTOR ---: Expects a list of Pydantic models.
+    records: list[S3EventNotificationRecord],
     s3_client: S3Client,
     distribution_bucket: str,
     bundle_key: str,
     context: LambdaContext,
     config: AppConfig,
-) -> Tuple[str, List[S3EventRecord], List[S3EventRecord]]:
+) -> tuple[str, list[S3EventNotificationRecord], list[S3EventNotificationRecord]]:
     """
-    Creates a bundle, uploads it, and returns the hash, a list of processed
-    records, and a list of any remaining (unprocessed) records.
+    Creates a bundle from pre-validated records, uploads it, and returns the
+    hash, processed records, and any remaining (unprocessed) records.
     """
-    if not records:
-        raise ValueError("Cannot process an empty batch.")
+    # The handler guarantees that 'records' is a non-empty list of valid objects
+    # and that the other parameters are correct.
+    try:
+        with create_tar_gz_bundle_stream(s3_client, records, context, config) as (
+            bundle,
+            sha256_hash,
+            processed_records,
+        ):
+            try:
+                s3_client.upload_gzipped_bundle(
+                    bucket=distribution_bucket,
+                    key=bundle_key,
+                    file_obj=bundle,
+                    content_hash=sha256_hash,
+                )
+            except Exception as e:
+                raise BundleCreationError(
+                    f"Failed to upload bundle to S3: {e}",
+                    error_code="BUNDLE_UPLOAD_FAILED",
+                ) from e
 
-    with create_tar_gz_bundle_stream(s3_client, records, context, config) as (
-        bundle,
-        sha256_hash,
-        processed_records,
-    ):
-        s3_client.upload_gzipped_bundle(
-            bucket=distribution_bucket,
-            key=bundle_key,
-            file_obj=bundle,
-            content_hash=sha256_hash,
+        logger.info(
+            "Successfully staged bundle",
+            extra={
+                "key": bundle_key,
+                "hash": sha256_hash,
+                "processed_count": len(processed_records),
+            },
         )
 
-    logger.info(
-        "Successfully staged bundle to distribution bucket",
-        extra={
-            "key": bundle_key,
-            "hash": sha256_hash,
-            "processed_count": len(processed_records),
-            "initial_count": len(records),
-        },
-    )
+        # Calculate remaining records (logic is the same, but works on Pydantic objects)
+        processed_set = set(processed_records)
+        remaining_records = [r for r in records if r not in processed_set]
 
-    # Calculate the records that were not processed
-    remaining_records = [r for r in records if r not in processed_records]
+        return sha256_hash, processed_records, remaining_records
 
-    # Return the hash and both lists
-    return sha256_hash, processed_records, remaining_records
+    except (MemoryLimitError, DiskSpaceError, BundleCreationError):
+        # Re-raise our specific, expected exceptions
+        raise
+    except Exception as e:
+        # Wrap any other unexpected errors in a generic batch processing error
+        raise BundleCreationError(
+            f"Unexpected error during batch processing: {e}",
+            error_code="BATCH_PROCESSING_ERROR",
+        ) from e

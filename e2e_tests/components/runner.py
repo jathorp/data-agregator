@@ -829,7 +829,7 @@ class E2ETestRunner:
 
         # Re-upload the exact same file to the same key. This fires a new event for a new version.
         self.console.log(
-            f"Re-uploading file to the same S3 key to create a new version..."
+            "Re-uploading file to the same S3 key to create a new version..."
         )
         self.s3.upload_file(str(local_path), self.config.landing_bucket, s3_key)
 
@@ -849,7 +849,7 @@ class E2ETestRunner:
             return 0
         else:
             self.console.print(
-                f"\n[bold red]❌ TEST FAILED: A second bundle was not created for the new file version.[/bold red]"
+                "\n[bold red]❌ TEST FAILED: A second bundle was not created for the new file version.[/bold red]"
             )
             self.console.print(
                 "[bold red]   This indicates a potential issue with the idempotency key or event processing.[/bold red]"

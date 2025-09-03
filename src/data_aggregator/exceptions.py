@@ -84,10 +84,17 @@ class S3ObjectNotFoundError(S3Error, NonRetryableError):
 
     def __init__(self, bucket: str, key: str, **kwargs):
         message = f"S3 object not found: s3://{bucket}/{key}"
-        context = {"bucket": bucket, "key": key}
-        super().__init__(
-            message, error_code="S3_OBJECT_NOT_FOUND", context=context, **kwargs
-        )
+        
+        # Start with any context passed in via kwargs.
+        final_context = kwargs.get("context", {}).copy()
+        
+        # Add (and overwrite with) our default context values.
+        final_context.update({"bucket": bucket, "key": key})
+        
+        # Update kwargs with the final merged context.
+        kwargs["context"] = final_context
+        
+        super().__init__(message, error_code="S3_OBJECT_NOT_FOUND", **kwargs)
 
 
 class S3AccessDeniedError(S3Error, NonRetryableError):
@@ -95,10 +102,17 @@ class S3AccessDeniedError(S3Error, NonRetryableError):
 
     def __init__(self, bucket: str, key: str, **kwargs):
         message = f"Access denied to S3 object: s3://{bucket}/{key}"
-        context = {"bucket": bucket, "key": key}
-        super().__init__(
-            message, error_code="S3_ACCESS_DENIED", context=context, **kwargs
-        )
+        
+        # Start with any context passed in via kwargs.
+        final_context = kwargs.get("context", {}).copy()
+        
+        # Add (and overwrite with) our default context values.
+        final_context.update({"bucket": bucket, "key": key})
+        
+        # Update kwargs with the final merged context.
+        kwargs["context"] = final_context
+        
+        super().__init__(message, error_code="S3_ACCESS_DENIED", **kwargs)
 
 
 class S3ThrottlingError(S3Error, RetryableError):
@@ -106,8 +120,17 @@ class S3ThrottlingError(S3Error, RetryableError):
 
     def __init__(self, operation: str, **kwargs):
         message = f"S3 operation throttled: {operation}"
-        context = {"operation": operation}
-        super().__init__(message, error_code="S3_THROTTLING", context=context, **kwargs)
+        
+        # Start with any context passed in via kwargs.
+        final_context = kwargs.get("context", {}).copy()
+        
+        # Add (and overwrite with) our default context values.
+        final_context.update({"operation": operation})
+        
+        # Update kwargs with the final merged context.
+        kwargs["context"] = final_context
+        
+        super().__init__(message, error_code="S3_THROTTLING", **kwargs)
 
 
 class S3TimeoutError(S3Error, RetryableError):
@@ -144,13 +167,20 @@ class InvalidConfigurationError(ValidationError):
 
     def __init__(self, config_field: str, value: Any = None, **kwargs):
         message = f"Invalid configuration: {config_field}"
-        context = {
+        
+        # Start with any context passed in via kwargs.
+        final_context = kwargs.get("context", {}).copy()
+        
+        # Add (and overwrite with) our default context values.
+        final_context.update({
             "config_field": config_field,
             "value": str(value) if value is not None else None,
-        }
-        super().__init__(
-            message, error_code="INVALID_CONFIGURATION", context=context, **kwargs
-        )
+        })
+        
+        # Update kwargs with the final merged context.
+        kwargs["context"] = final_context
+        
+        super().__init__(message, error_code="INVALID_CONFIGURATION", **kwargs)
 
 
 # === Processing Errors ===
@@ -167,10 +197,17 @@ class BundleCreationError(ProcessingError, RetryableError):
 
     def __init__(self, reason: str, **kwargs):
         message = f"Bundle creation failed: {reason}"
-        context = {"reason": reason}
-        super().__init__(
-            message, error_code="BUNDLE_CREATION_FAILED", context=context, **kwargs
-        )
+        
+        # Start with any context passed in via kwargs.
+        final_context = kwargs.get("context", {}).copy()
+        
+        # Add (and overwrite with) our default context values.
+        final_context.update({"reason": reason})
+        
+        # Update kwargs with the final merged context.
+        kwargs["context"] = final_context
+        
+        super().__init__(message, error_code="BUNDLE_CREATION_FAILED", **kwargs)
 
 
 class DiskSpaceError(ProcessingError, RetryableError):
@@ -178,10 +215,17 @@ class DiskSpaceError(ProcessingError, RetryableError):
 
     def __init__(self, required_bytes: int, available_bytes: int, **kwargs):
         message = f"Insufficient disk space: required {required_bytes}, available {available_bytes}"
-        context = {"required_bytes": required_bytes, "available_bytes": available_bytes}
-        super().__init__(
-            message, error_code="INSUFFICIENT_DISK_SPACE", context=context, **kwargs
-        )
+        
+        # Start with any context passed in via kwargs.
+        final_context = kwargs.get("context", {}).copy()
+        
+        # Add (and overwrite with) our default context values.
+        final_context.update({"required_bytes": required_bytes, "available_bytes": available_bytes})
+        
+        # Update kwargs with the final merged context.
+        kwargs["context"] = final_context
+        
+        super().__init__(message, error_code="INSUFFICIENT_DISK_SPACE", **kwargs)
 
 
 class MemoryLimitError(ProcessingError, RetryableError):
@@ -189,10 +233,17 @@ class MemoryLimitError(ProcessingError, RetryableError):
 
     def __init__(self, operation: str, **kwargs):
         message = f"Memory limit exceeded during: {operation}"
-        context = {"operation": operation}
-        super().__init__(
-            message, error_code="MEMORY_LIMIT_EXCEEDED", context=context, **kwargs
-        )
+        
+        # Start with any context passed in via kwargs.
+        final_context = kwargs.get("context", {}).copy()
+        
+        # Add (and overwrite with) our default context values.
+        final_context.update({"operation": operation})
+        
+        # Update kwargs with the final merged context.
+        kwargs["context"] = final_context
+        
+        super().__init__(message, error_code="MEMORY_LIMIT_EXCEEDED", **kwargs)
 
 
 # === Configuration Errors ===
@@ -219,10 +270,17 @@ class BundlingTimeoutError(SQSBatchProcessingError):
 
     def __init__(self, remaining_time_ms: int, **kwargs):
         message = f"Insufficient time remaining for bundling: {remaining_time_ms}ms"
-        context = {"remaining_time_ms": remaining_time_ms}
-        super().__init__(
-            message, error_code="BUNDLING_TIMEOUT", context=context, **kwargs
-        )
+        
+        # Start with any context passed in via kwargs.
+        final_context = kwargs.get("context", {}).copy()
+        
+        # Add (and overwrite with) our default context values.
+        final_context.update({"remaining_time_ms": remaining_time_ms})
+        
+        # Update kwargs with the final merged context.
+        kwargs["context"] = final_context
+        
+        super().__init__(message, error_code="BUNDLING_TIMEOUT", **kwargs)
 
 
 class BatchTooLargeError(SQSBatchProcessingError):
@@ -230,10 +288,17 @@ class BatchTooLargeError(SQSBatchProcessingError):
 
     def __init__(self, batch_size_bytes: int, limit_bytes: int, **kwargs):
         message = f"Batch size {batch_size_bytes} exceeds limit {limit_bytes}"
-        context = {"batch_size_bytes": batch_size_bytes, "limit_bytes": limit_bytes}
-        super().__init__(
-            message, error_code="BATCH_TOO_LARGE", context=context, **kwargs
-        )
+        
+        # Start with any context passed in via kwargs.
+        final_context = kwargs.get("context", {}).copy()
+        
+        # Add (and overwrite with) our default context values.
+        final_context.update({"batch_size_bytes": batch_size_bytes, "limit_bytes": limit_bytes})
+        
+        # Update kwargs with the final merged context.
+        kwargs["context"] = final_context
+        
+        super().__init__(message, error_code="BATCH_TOO_LARGE", **kwargs)
 
 
 class TransientDynamoError(SQSBatchProcessingError):
@@ -241,10 +306,17 @@ class TransientDynamoError(SQSBatchProcessingError):
 
     def __init__(self, operation: str, **kwargs):
         message = f"Transient DynamoDB error during: {operation}"
-        context = {"operation": operation}
-        super().__init__(
-            message, error_code="TRANSIENT_DYNAMO_ERROR", context=context, **kwargs
-        )
+        
+        # Start with any context passed in via kwargs.
+        final_context = kwargs.get("context", {}).copy()
+        
+        # Add (and overwrite with) our default context values.
+        final_context.update({"operation": operation})
+        
+        # Update kwargs with the final merged context.
+        kwargs["context"] = final_context
+        
+        super().__init__(message, error_code="TRANSIENT_DYNAMO_ERROR", **kwargs)
 
 
 # Backward compatibility alias

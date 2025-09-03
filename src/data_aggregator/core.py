@@ -339,5 +339,4 @@ def process_and_stage_batch(
         # Wrap any other unexpected errors in a generic batch processing error
         raise BundleCreationError(
             f"Unexpected error during batch processing: {e}",
-            error_code="BATCH_PROCESSING_ERROR",
         ) from e

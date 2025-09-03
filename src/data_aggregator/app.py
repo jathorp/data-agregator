@@ -159,6 +159,18 @@ def _process_valid_records(
     now = datetime.now(timezone.utc)
     bundle_key = f"{now.strftime('%Y/%m/%d/%H')}/bundle-{context.aws_request_id}.tar.gz"
 
+    # Calculate total size for logging
+    total_size_bytes = sum(record.s3.object.size for record in records_to_process)
+    
+    logger.info(
+        "Starting bundle creation",
+        extra={
+            "records_count": len(records_to_process),
+            "total_size_mb": round(total_size_bytes / (1024 * 1024), 2),
+            "bundle_key": bundle_key,
+        },
+    )
+
     try:
         _, _, remaining_records = process_and_stage_batch(
             records=records_to_process,
@@ -170,6 +182,12 @@ def _process_valid_records(
         )
 
         processed_count = len(records_to_process) - len(remaining_records)
+        processed_size_bytes = sum(
+            record.s3.object.size 
+            for record in records_to_process 
+            if record not in remaining_records
+        )
+        
         metrics.add_metric(
             name="ProcessedRecordsInBundle",
             unit=MetricUnit.Count,
@@ -177,6 +195,14 @@ def _process_valid_records(
         )
 
         if not remaining_records:
+            logger.info(
+                "Bundle creation completed successfully",
+                extra={
+                    "processed_records": processed_count,
+                    "processed_size_mb": round(processed_size_bytes / (1024 * 1024), 2),
+                    "bundle_key": bundle_key,
+                },
+            )
             return set()
 
         metrics.add_metric(
@@ -185,12 +211,12 @@ def _process_valid_records(
             value=len(remaining_records),
         )
         logger.warning(
-            "Some records were not processed and will be retried.",
+            "Bundle creation partially completed - some records will be retried",
             extra={
+                "processed_records": processed_count,
                 "remaining_count": len(remaining_records),
-                "example_keys": [
-                    r.s3.object.original_key for r in remaining_records[:3]
-                ],
+                "processed_size_mb": round(processed_size_bytes / (1024 * 1024), 2),
+                "bundle_key": bundle_key,
             },
         )
         return _get_message_ids_for_s3_records(
@@ -266,18 +292,26 @@ def _process_valid_records(
             value=1,
         )
 
+        # Log error without sensitive data - get_error_context already sanitizes
         log_level = logger.warning if retryable else logger.error
         log_level(
-            f"Application error during batch processing: {e}", extra=error_details
+            f"Application error during batch processing: {e}", 
+            extra={
+                "error_type": error_details.get("error_type"),
+                "retryable": retryable,
+                "records_count": len(records_to_process),
+            }
         )
 
         if retryable:
-            return _get_message_ids_for_s3_records(...)
+            return _get_message_ids_for_s3_records(
+                records_to_process, record_to_message_id_map
+            )
         else:
             return set()
 
 
-@logger.inject_lambda_context(log_event=True)
+@logger.inject_lambda_context()
 @tracer.capture_lambda_handler
 @metrics.log_metrics(capture_cold_start_metric=True)
 def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
@@ -321,6 +355,21 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
         if not sqs_records:
             logger.warning("Event did not contain any SQS records. Exiting gracefully.")
             return {"batchItemFailures": []}
+
+        # Log batch processing start with essential stats
+        total_s3_records = sum(
+            len(json.loads(sqs_record["body"]).get("Records", []))
+            for sqs_record in sqs_records
+            if sqs_record.get("body")
+        )
+        logger.info(
+            "Starting SQS batch processing",
+            extra={
+                "sqs_messages": len(sqs_records),
+                "total_s3_records": total_s3_records,
+                "request_id": context.aws_request_id,
+            },
+        )
 
         # --- Setup tracking variables ---
         records_to_process: list[S3EventNotificationRecord] = []
@@ -413,11 +462,20 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
                     )
                     failed_message_ids.add(message_id)
 
-        # --- 2. If no new valid records, exit now ---
+        # --- 2. Log idempotency filtering results and exit if no valid records ---
+        duplicates_count = total_s3_records - len(records_to_process) - len(failed_message_ids)
+        logger.info(
+            "Idempotency filtering completed",
+            extra={
+                "total_s3_records": total_s3_records,
+                "new_records": len(records_to_process),
+                "duplicates_skipped": duplicates_count,
+                "validation_failures": len(failed_message_ids),
+            },
+        )
+
         if not records_to_process:
-            logger.info(
-                "No new records to process after filtering duplicates and errors."
-            )
+            logger.info("No new records to process after filtering.")
             return build_partial_failure_response(failed_message_ids)
 
         # --- 3. Process the valid batch ---

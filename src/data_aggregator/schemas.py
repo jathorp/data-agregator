@@ -81,3 +81,25 @@ class S3EventNotificationRecord(BaseModel):
     """
 
     s3: S3DataModel
+
+    def __hash__(self) -> int:
+        """Make the model hashable for use in sets."""
+        return hash((
+            self.s3.bucket.name,
+            self.s3.object.original_key,
+            self.s3.object.size,
+            self.s3.object.version_id,
+            self.s3.object.sequencer,
+        ))
+
+    def __eq__(self, other) -> bool:
+        """Define equality for proper set operations."""
+        if not isinstance(other, S3EventNotificationRecord):
+            return False
+        return (
+            self.s3.bucket.name == other.s3.bucket.name
+            and self.s3.object.original_key == other.s3.object.original_key
+            and self.s3.object.size == other.s3.object.size
+            and self.s3.object.version_id == other.s3.object.version_id
+            and self.s3.object.sequencer == other.s3.object.sequencer
+        )

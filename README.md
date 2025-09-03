@@ -5,7 +5,7 @@
 **Author(s):** john
 
 **Change Log:**
-*   **Version 0.3.0:** Enhanced README with comprehensive developer documentation including Quick Start guide, detailed project structure, development workflow, testing strategy, troubleshooting guide, and contributing guidelines while preserving all architectural documentation.
+*   **Version 0.3.0:** Enhanced README with comprehensive developer documentation including Quick Start guide, detailed project structure, development workflow, testing strategy, troubleshooting guide, and contributing guidelines while preserving all architectural documentation. **NEW: Pydantic Integration** - Replaced manual validation with Pydantic models for robust runtime validation with automatic S3 key sanitization and hybrid validation approach (TypedDict + Pydantic).
 *   **Version 0.2.0:** Major architectural change from a push-based delivery model to a pull-based model per new requirements. The system now stages aggregated data in a dedicated S3 bucket for the on-premise service to fetch. This simplifies the design by removing the need for HTTP delivery logic and circuit breakers.
 
 #### **1. Executive Summary**
@@ -52,6 +52,68 @@ uv run pytest tests/unit/ -v
 # Check code quality
 uv run ruff check src/
 ```
+
+---
+
+## 📋 Data Schema and Validation
+
+### Key Dependencies
+- **Python 3.13+**: Modern Python with enhanced type system
+- **Pydantic 2.11.7+**: Runtime data validation and parsing
+- **AWS Lambda Powertools**: Structured logging, tracing, metrics
+- **boto3**: AWS SDK for Python
+
+### Schema Architecture
+The application uses a dual-schema approach for optimal developer experience and runtime safety:
+
+**Static Schemas (TypedDict)**
+- Used for type hints and static analysis
+- Provides IDE autocompletion and mypy checking
+- Located in `schemas.py` as `S3EventRecord`
+
+**Runtime Schemas (Pydantic)**
+- Used for actual data parsing and validation
+- Provides runtime type checking and data sanitization
+- Located in `schemas.py` as `S3EventNotificationRecord`
+
+### Validation Features
+- **Automatic S3 Key Sanitization**: Prevents path traversal attacks
+- **Type Coercion**: Converts compatible types (e.g., string numbers to integers)
+- **Field Validation**: Ensures required fields are present and valid
+- **Error Context**: Provides detailed validation error messages
+
+### Security Validation
+All S3 keys are automatically sanitized to prevent:
+- Path traversal attacks (`../../../etc/passwd`)
+- Windows reserved names (`CON`, `PRN`, etc.)
+- Control characters and Unicode format characters
+- Absolute paths and redundant segments
+
+### Pydantic Integration Example
+```python
+# Input: Raw S3 event record
+raw_record = {
+    "s3": {
+        "bucket": {"name": "my-bucket"},
+        "object": {
+            "key": "C:\\Users\\..\\file.txt",  # Potentially unsafe
+            "size": 1234,
+            "versionId": "abc-123",
+            "sequencer": "0055AED4D224A8D1"
+        }
+    }
+}
+
+# Pydantic automatically validates and sanitizes
+parsed = S3EventNotificationRecord.model_validate(raw_record)
+
+# Results:
+assert parsed.s3.object.key == "Users/file.txt"  # Sanitized
+assert parsed.s3.object.original_key == "C:\\Users\\..\\file.txt"  # Preserved
+assert parsed.s3.object.size == 1234  # Type validated
+```
+
+For implementation details, see `src/data_aggregator/schemas.py` and `tests/unit/test_schemas.py`.
 
 ---
 

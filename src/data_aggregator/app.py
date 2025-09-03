@@ -400,6 +400,8 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
         records_to_process: list[S3EventNotificationRecord] = []
         failed_message_ids: set[str] = set()
         record_to_message_id_map: dict[str, set[str]] = {}
+        duplicates_skipped_keys: list[str] = []
+        validation_failures_keys: list[str] = []
 
         # --- 1. First Pass: Parse, build lookup map, and run idempotency checks ---
         for sqs_record in sqs_records:
@@ -457,6 +459,14 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
                     metrics.add_metric(
                         name="FailedIdempotencyChecks", unit=MetricUnit.Count, value=1
                     )
+                    # Extract bucket and key for tracking duplicates
+                    try:
+                        bucket_name = s3_record.get("s3", {}).get("bucket", {}).get("name", "unknown-bucket")
+                        object_key = s3_record.get("s3", {}).get("object", {}).get("key", "unknown-key")
+                        duplicates_skipped_keys.append(f"{bucket_name}/{object_key}")
+                    except (KeyError, AttributeError):
+                        duplicates_skipped_keys.append("unknown-bucket/unknown-key")
+                    
                     logger.info(
                         "Skipping duplicate S3 object.",
                         extra={"idempotency_key": idempotency_key},
@@ -466,6 +476,14 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
                     metrics.add_metric(
                         name="InvalidS3Records", unit=MetricUnit.Count, value=1
                     )
+                    # Extract bucket and key for tracking validation failures
+                    try:
+                        bucket_name = s3_record.get("s3", {}).get("bucket", {}).get("name", "unknown-bucket")
+                        object_key = s3_record.get("s3", {}).get("object", {}).get("key", "unknown-key")
+                        validation_failures_keys.append(f"{bucket_name}/{object_key}")
+                    except (KeyError, AttributeError):
+                        validation_failures_keys.append("unknown-bucket/unknown-key")
+                    
                     logger.warning(
                         "Invalid S3 record failed validation.",
                         extra={
@@ -496,6 +514,8 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
                 "new_records": len(records_to_process),
                 "duplicates_skipped": duplicates_count,
                 "validation_failures": len(failed_message_ids),
+                "duplicates_skipped_keys": duplicates_skipped_keys,
+                "validation_failures_keys": validation_failures_keys,
             },
         )
 

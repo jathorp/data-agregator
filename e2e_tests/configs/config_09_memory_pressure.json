@@ -1,0 +1,13 @@
+{
+  "description": "Tests Lambda memory limit handling with 512MB memory allocation. Processes files sized to stay in memory and push Lambda close to its memory limit, validating MemoryLimitError handling.",
+  "test_type": "memory_pressure",
+  "lambda_function_name": "data-aggregator-processor-dev",
+  "landing_bucket": "data-aggregator-landing-dev",
+  "distribution_bucket": "data-aggregator-distribution-dev",
+  "num_files": 15,
+  "size_mb": 30,
+  "concurrency": 1,
+  "timeout_seconds": 300,
+  "report_file": "results_09_memory_pressure.xml",
+  "generator_type": "random"
+}

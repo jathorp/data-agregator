@@ -90,7 +90,7 @@ class E2ETestRunner:
         self.run_id = f"e2e-test-{uuid.uuid4().hex[:8]}"
 
         # Set the S3 prefix based on the test type to isolate test data.
-        if self.config.test_type in ["direct_invoke"]:
+        if self.config.test_type in ["direct_invoke", "memory_pressure"]:
             # For direct invoke tests, use a prefix that SQS is NOT listening to.
             # This prevents a race condition with an SQS-triggered Lambda.
             base_prefix = "direct-invoke-tests"
@@ -665,6 +665,8 @@ class E2ETestRunner:
                 return self._run_file_not_found_test()
             elif self.config.test_type == "partial_batch_failure":
                 return self._run_partial_batch_failure_test()
+            elif self.config.test_type == "memory_pressure":
+                return self._run_memory_pressure_test()
 
             self.manifest = self._produce_and_upload()
             self.console.print(
@@ -1189,3 +1191,160 @@ class E2ETestRunner:
                 "\n[bold red]❌ TEST FAILED: The final set of extracted files did not match the initial manifest.[/bold red]"
             )
             return 1
+
+    def _run_memory_pressure_test(self) -> int:
+        """
+        Tests Lambda memory limit handling by directly invoking the Lambda with files
+        sized to stay in memory (under 64MB spooling threshold) and push the Lambda
+        close to its 512MB memory limit. This validates MemoryLimitError handling.
+        
+        Expected outcome: Lambda should either successfully process all files or 
+        gracefully handle memory pressure with appropriate error handling.
+        """
+        self.console.print("\n--- [bold blue]Memory Pressure Test[/bold blue] ---")
+
+        if not self.config.lambda_function_name:
+            self.console.print(
+                "[bold red]Configuration Error: 'lambda_function_name' must be set for a 'memory_pressure' test.[/bold red]"
+            )
+            return 2  # Setup failure code
+
+        # 1. Produce files as normal
+        manifest = self._produce_and_upload()
+        self.console.print("[green]✓ Source files created.[/green]")
+
+        # Calculate total memory usage for logging
+        total_size_mb = self.config.num_files * self.config.size_mb
+        self.console.print(
+            f"[yellow]Memory pressure test: {self.config.num_files} files × {self.config.size_mb}MB = {total_size_mb}MB total[/yellow]"
+        )
+        self.console.print(
+            f"[yellow]Files sized to stay in memory (under 64MB spooling threshold)[/yellow]"
+        )
+
+        # 2. Construct the S3EventRecord-like payload for the Lambda
+        lambda_payload_records = []
+        for source_file in manifest["source_files"]:
+            bucket_name = self.config.landing_bucket
+            record = {
+                "s3": {
+                    "bucket": {
+                        "name": bucket_name,
+                        "arn": f"arn:aws:s3:::{bucket_name}",
+                    },
+                    "object": {
+                        "key": source_file["key"], 
+                        "size": source_file["size"],
+                        "sequencer": f"test-sequencer-{uuid.uuid4().hex[:16]}"
+                    },
+                }
+            }
+            lambda_payload_records.append(record)
+
+        payload = {"e2e_test_direct_invoke": True, "records": lambda_payload_records}
+
+        # 3. Invoke the Lambda function directly
+        self.console.print(
+            f"Directly invoking Lambda '{self.config.lambda_function_name}' with {len(payload['records'])} records for memory pressure test."
+        )
+
+        try:
+            response = self.lambda_client.invoke(
+                FunctionName=self.config.lambda_function_name,
+                InvocationType="RequestResponse",
+                LogType="Tail",
+                Payload=json.dumps(payload),
+            )
+        except Exception as e:
+            self.console.print(f"[bold red]Lambda invocation failed: {e}[/bold red]")
+            return 1
+
+        # 4. Analyze the response and logs
+        log_result = base64.b64decode(response.get("LogResult", b"")).decode("utf-8")
+
+        self.console.print("\n--- [bold yellow]Lambda Log Tail[/bold yellow] ---")
+        self.console.print(Panel(log_result, border_style="yellow"))
+
+        # 5. Check for different possible outcomes
+        if response.get("FunctionError"):
+            # Check if it's a memory-related error
+            if "MemoryLimitError" in log_result or "Runtime.OutOfMemory" in log_result:
+                self.console.print(
+                    "\n[bold green]✅ TEST PASSED: Lambda correctly detected memory pressure and failed gracefully.[/bold green]"
+                )
+                return 0
+            else:
+                self.console.print(
+                    f"[bold red]❌ TEST FAILED: Lambda function returned an unexpected error: {response.get('FunctionError')}[/bold red]"
+                )
+                return 1
+        else:
+            # Lambda completed successfully - check if protective limits were hit
+            self.console.print(
+                "\n[bold green]✅ Lambda completed successfully despite memory pressure.[/bold green]"
+            )
+            
+            # Check if protective limits (disk usage) were hit during processing
+            if "Predicted disk usage exceeds limit" in log_result:
+                self.console.print(
+                    "\n[bold yellow]Protective disk limit was hit during memory pressure test.[/bold yellow]"
+                )
+                
+                # Parse the number of processed records from the logs
+                import re
+                processed_match = re.search(r'"processed_records":(\d+)', log_result)
+                if processed_match:
+                    processed_count = int(processed_match.group(1))
+                    self.console.print(
+                        f"[yellow]Lambda processed {processed_count} out of {len(manifest['source_files'])} files before hitting limits.[/yellow]"
+                    )
+                    
+                    # Create a partial manifest with only the files that were actually processed
+                    # Files are processed in order, so take the first N files
+                    expected_manifest: TestManifest = {
+                        "run_id": manifest["run_id"],
+                        "start_time": manifest["start_time"],
+                        "config": manifest["config"],
+                        "source_files": manifest["source_files"][:processed_count],
+                    }
+                    
+                    self.console.print(
+                        f"Validating partial bundle with {len(expected_manifest['source_files'])} files."
+                    )
+                    
+                    # Validate only the files that were actually processed
+                    self._consume_and_download(expected_manifest)
+                    results = self._validate_results(expected_manifest)
+                    self._display_and_report(results)
+                    
+                    if all(r["status"] == "PASS" for r in results):
+                        self.console.print(
+                            "\n[bold green]✅ TEST PASSED: Lambda correctly handled memory pressure and protective limits worked as expected.[/bold green]"
+                        )
+                        return 0
+                    else:
+                        self.console.print(
+                            "\n[bold red]❌ TEST FAILED: Validation of partial bundle failed.[/bold red]"
+                        )
+                        return 1
+                else:
+                    self.console.print(
+                        "\n[bold yellow]Could not parse processed record count from logs. Falling back to full validation.[/bold yellow]"
+                    )
+                    # Fall through to full validation
+            
+            # No protective limits hit - run standard full validation
+            self._consume_and_download(manifest)
+            results = self._validate_results(manifest)
+            self._display_and_report(results)
+
+            if all(r["status"] == "PASS" for r in results):
+                self.console.print(
+                    "\n[bold green]✅ TEST PASSED: Lambda successfully processed all files under memory pressure.[/bold green]"
+                )
+                return 0
+            else:
+                self.console.print(
+                    "\n[bold red]❌ TEST FAILED: Validation failed despite successful Lambda execution.[/bold red]"
+                )
+                return 1

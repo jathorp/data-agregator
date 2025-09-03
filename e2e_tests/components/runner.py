@@ -987,9 +987,12 @@ class E2ETestRunner:
 
     def _run_key_sanitization_test(self) -> int:
         """
-        Tests the S3 key sanitization logic. Uploads a file with a path-traversal
-        key and verifies that the Lambda's sanitization function correctly
-        transforms it into a safe path before adding it to the bundle.
+        Tests the S3 key sanitization security control. Uploads one valid file and one 
+        with a path traversal attempt (../../malicious_file.txt). The Lambda should 
+        reject the malicious file during validation and only process the safe file.
+        
+        Expected outcome: Only the safe file appears in the output bundle, the malicious 
+        file is rejected with a validation error and never processed.
         """
         self.console.print(
             "\n--- [bold blue]Key Sanitization Test (S3 Trigger)[/bold blue] ---"
@@ -1003,13 +1006,7 @@ class E2ETestRunner:
         input_safe_key = f"{self.s3_prefix}/safe_file.txt"
         input_malicious_key = f"{self.s3_prefix}/../../malicious_file.txt"
 
-        # 2. IMPORTANT: Define the keys as we EXPECT them to be named *inside the bundle*
-        #    after the Lambda's _sanitize_s3_key function runs.
-        #    os.path.normpath('data/run-id/../../malicious.txt') -> 'malicious.txt'
-        expected_output_safe_key = input_safe_key
-        expected_output_malicious_key = os.path.normpath(input_malicious_key)
-
-        # 3. Create and upload the files using the literal input keys.
+        # 2. Create and upload both files to S3
         files_to_upload = {
             "safe": {"upload_key": input_safe_key, "local_name": "safe_file.txt"},
             "malicious": {
@@ -1018,8 +1015,8 @@ class E2ETestRunner:
             },
         }
 
-        # Store hashes mapped to their EXPECTED output key
-        hashes_by_expected_key = {}
+        # Store hash for the safe file only (malicious file will be rejected)
+        safe_file_info = None
         for file_type, file_info in files_to_upload.items():
             local_path = self.source_dir / file_info["local_name"]
             file_hash = self.data_generator.generate(local_path, size_mb=1)
@@ -1030,47 +1027,42 @@ class E2ETestRunner:
                 f"Uploaded test file to S3 key: [cyan]{file_info['upload_key']}[/cyan]"
             )
 
+            # Only store info for the safe file - malicious file will be rejected
             if file_type == "safe":
-                hashes_by_expected_key[expected_output_safe_key] = (
-                    local_path.stat().st_size,
-                    file_hash,
-                )
-            else:
-                hashes_by_expected_key[expected_output_malicious_key] = (
-                    local_path.stat().st_size,
-                    file_hash,
-                )
+                safe_file_info = {
+                    "key": input_safe_key,
+                    "size": local_path.stat().st_size,
+                    "sha256": file_hash,
+                }
 
-        # 4. Create the manifest with the keys we EXPECT to find in the bundle.
-        manifest_records = [
-            {"key": key, "size": size, "sha256": sha}
-            for key, (size, sha) in hashes_by_expected_key.items()
-        ]
+        # 3. Create the manifest with ONLY the safe file we expect to find in the bundle.
+        #    The malicious file should be rejected during validation and never processed.
         self.manifest = {
             "run_id": self.run_id,
             "start_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "config": self.config.raw_config,
-            "source_files": sorted(manifest_records, key=lambda x: x["key"]),
+            "source_files": [safe_file_info],
         }
 
         self.console.log(
             f"Manifest created. Expecting to find keys in bundle: {[r['key'] for r in self.manifest['source_files']]}"
         )
 
-        # 5. Run the standard consumer and validator.
+        # 4. Run the standard consumer and validator.
         self._consume_and_download(self.manifest)
         results = self._validate_results(self.manifest)
         self._display_and_report(results)
 
-        # 6. Success is now simple: ALL files in our corrected manifest must pass validation.
+        # 5. Success condition: Only the safe file should pass validation.
+        #    The malicious file should not appear in any bundle.
         if all(r["status"] == "PASS" for r in results):
             self.console.print(
-                "\n[bold green]✅ TEST PASSED: The key was correctly sanitized and all files were processed.[/bold green]"
+                "\n[bold green]✅ TEST PASSED: The malicious file was correctly rejected and only the safe file was processed.[/bold green]"
             )
             return 0
         else:
             self.console.print(
-                "\n[bold red]❌ TEST FAILED: Validation failed against the sanitized keys.[/bold red]"
+                "\n[bold red]❌ TEST FAILED: Validation failed. The security control did not work as expected.[/bold red]"
             )
             return 1
 

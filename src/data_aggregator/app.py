@@ -195,12 +195,20 @@ def _process_valid_records(
         )
 
         if not remaining_records:
+            # Extract bundled file names for debugging
+            bundled_files = [
+                f"{record.s3.bucket.name}/{record.s3.object.original_key}"
+                for record in records_to_process
+                if record not in remaining_records
+            ]
+            
             logger.info(
                 "Bundle creation completed successfully",
                 extra={
                     "processed_records": processed_count,
                     "processed_size_mb": round(processed_size_bytes / (1024 * 1024), 2),
                     "bundle_key": bundle_key,
+                    "bundled_files": bundled_files,
                 },
             )
             return set()

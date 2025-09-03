@@ -8,6 +8,7 @@
   "size_mb": 1,
   "concurrency": 1,
   "report_file": "results_07_idempotency.xml",
-  "timeout_seconds": 240,
-  "verbose": false
+  "timeout_seconds": 60,
+  "verbose": false,
+  "keep_files": true
 }

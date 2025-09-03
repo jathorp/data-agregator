@@ -286,26 +286,57 @@ class E2ETestRunner:
                     local_bundle_path = self.local_workspace / Path(bundle_key).name
 
                     try:
+                        # Enhanced download logging
+                        progress.log(f"  [dim]Downloading from S3...[/dim]")
                         self.s3.download_file(
                             self.config.distribution_bucket,
                             bundle_key,
                             str(local_bundle_path),
                         )
+                        
+                        # Verify download succeeded
+                        if not local_bundle_path.exists():
+                            progress.log(f"  [bold red]✗ ERROR:[/] Downloaded file does not exist: {local_bundle_path}")
+                            continue
+                            
+                        file_size = local_bundle_path.stat().st_size
+                        progress.log(f"  [dim]Downloaded bundle size: {file_size} bytes[/dim]")
+                        
+                        if file_size == 0:
+                            progress.log(f"  [bold red]✗ ERROR:[/] Downloaded bundle is empty")
+                            continue
+
                         self.processed_bundle_keys.add(bundle_key)
 
+                        # Enhanced tarball inspection
+                        progress.log(f"  [dim]Opening tarball for inspection...[/dim]")
                         with tarfile.open(local_bundle_path, "r:gz") as tar:
                             # Get the list of members (files) in the tarball
                             members = tar.getmembers()
                             file_count = len(members)
 
-                            # Log the count before extracting
-                            progress.log(
-                                f"  [dim]Found {file_count} file(s) in bundle. Extracting...[/dim]"
-                            )
+                            # Log detailed member information
+                            progress.log(f"  [dim]Found {file_count} file(s) in bundle:[/dim]")
+                            for member in members:
+                                progress.log(f"    - [cyan]{member.name}[/cyan] ({member.size} bytes)")
 
-                            tar.extractall(path=self.extracted_dir, filter="data")
+                            if file_count == 0:
+                                progress.log(f"  [bold yellow]WARNING:[/] Bundle contains no files")
+                                continue
+
+                            # Log extraction details
+                            progress.log(f"  [dim]Extracting to: {self.extracted_dir}[/dim]")
+                            
+                            # Use the 'data' filter to safely extract files
+                            tar.extractall(path=self.extracted_dir, filter='data')
+                            
+                            # Verify extraction succeeded
+                            extracted_files = list(self.extracted_dir.rglob("*"))
+                            extracted_file_count = len([f for f in extracted_files if f.is_file()])
+                            progress.log(f"  [dim]Extraction complete. Found {extracted_file_count} files in extracted directory[/dim]")
+                            
                         progress.log(
-                            f"  [green]✓[/green] Successfully extracted [magenta]{bundle_key}[/magenta]."
+                            f"  [green]✓[/green] Successfully processed [magenta]{bundle_key}[/magenta]."
                         )
 
                     except tarfile.ReadError as e:
@@ -453,6 +484,47 @@ class E2ETestRunner:
         ET.indent(tree, space="  ")
         tree.write(self.config.report_file, encoding="utf-8", xml_declaration=True)
 
+    def _debug_extracted_contents(self):
+        """Debug method to show what files were actually extracted."""
+        # Only show debug output if verbose mode is enabled
+        if not self.config.verbose:
+            return
+            
+        self.console.print("\n--- [bold cyan]DEBUG: Extracted Directory Contents[/bold cyan] ---")
+        
+        if not self.extracted_dir.exists():
+            self.console.print("[red]Extracted directory does not exist![/red]")
+            return
+            
+        # Show the full directory tree
+        self.console.print(f"[cyan]Extracted directory:[/cyan] {self.extracted_dir}")
+        
+        all_files = list(self.extracted_dir.rglob("*"))
+        if not all_files:
+            self.console.print("[yellow]No files found in extracted directory.[/yellow]")
+            return
+            
+        self.console.print(f"[green]Found {len(all_files)} total items:[/green]")
+        
+        for item in sorted(all_files):
+            relative_path = item.relative_to(self.extracted_dir)
+            if item.is_file():
+                size = item.stat().st_size
+                self.console.print(f"  📄 [cyan]{relative_path}[/cyan] ({size} bytes)")
+            elif item.is_dir():
+                self.console.print(f"  📁 [blue]{relative_path}/[/blue]")
+                
+        # Show what the validation logic would see
+        extracted_map = {
+            str(p.relative_to(self.extracted_dir)): p
+            for p in self.extracted_dir.rglob("*")
+            if p.is_file()
+        }
+        
+        self.console.print(f"\n[yellow]Validation would see these file keys:[/yellow]")
+        for key in sorted(extracted_map.keys()):
+            self.console.print(f"  🔑 [magenta]{key}[/magenta]")
+
     def _cleanup(self):
         """Cleans up all resources: S3 source/distribution objects and local workspace."""
         self.console.print("\n--- [bold yellow]Cleanup Phase[/bold yellow] ---")
@@ -530,6 +602,41 @@ class E2ETestRunner:
         except Exception as e:
             self.console.log(
                 f"[bold red]Could not perform pre-test cleanup: {e}[/bold red]"
+            )
+            # We don't fail the test here, just log a warning.
+
+    def _cleanup_all_bundles(self):
+        """Deletes ALL bundles from the distribution bucket to ensure a completely clean state."""
+        self.console.print("\n--- [bold yellow]Complete Bundle Cleanup[/bold yellow] ---")
+        try:
+            paginator = self.s3.get_paginator("list_objects_v2")
+            pages = paginator.paginate(Bucket=self.config.distribution_bucket)
+
+            all_bundles = []
+            for page in pages:
+                for obj in page.get("Contents", []):
+                    # Check if it looks like a bundle
+                    if "bundle-" in obj["Key"]:
+                        all_bundles.append({"Key": obj["Key"]})
+
+            if not all_bundles:
+                self.console.log(
+                    "No bundles found in distribution bucket. Environment is clean."
+                )
+                return
+
+            self.console.log(f"Found {len(all_bundles)} bundle(s) to delete...")
+            # S3 delete_objects has a limit of 1000 keys per request
+            for i in range(0, len(all_bundles), 1000):
+                chunk = all_bundles[i : i + 1000]
+                self.s3.delete_objects(
+                    Bucket=self.config.distribution_bucket, Delete={"Objects": chunk}
+                )
+            self.console.log("[green]✓ All bundles cleaned up successfully.[/green]")
+
+        except Exception as e:
+            self.console.log(
+                f"[bold red]Could not perform complete cleanup: {e}[/bold red]"
             )
             # We don't fail the test here, just log a warning.
 
@@ -783,6 +890,10 @@ class E2ETestRunner:
             "\n--- [bold blue]File Versioning Test (Scenario B)[/bold blue] ---"
         )
 
+        # Ensure completely clean environment for idempotency test
+        # This prevents interference from previous test runs
+        self._cleanup_all_bundles()
+
         # --- Phase 1: Process Initial Version ---
         self.console.print("\n[cyan]Phase 1: Processing the initial file...[/cyan]")
 
@@ -811,10 +922,21 @@ class E2ETestRunner:
                 "[bold red]❌ TEST FAILED: Initial bundle was not created in time.[/bold red]"
             )
             return 1
-        self.processed_bundle_keys.add(bundle_key_1)  # Track this so cleanup works
 
         # 4. Validate the first bundle. This confirms the baseline test setup is working correctly.
+        # Note: _wait_for_bundle_and_get_key() doesn't add to processed_bundle_keys, it just returns the key
+        # We need to download and extract this bundle to validate it
         self._consume_and_download(self.manifest)
+        
+        # DEBUG: Show what was actually extracted
+        self._debug_extracted_contents()
+        
+        # DEBUG: Show what the manifest expects vs what we found (only in verbose mode)
+        if self.config.verbose:
+            self.console.print(f"\n[yellow]DEBUG: Manifest expects to find:[/yellow]")
+            for source_file in self.manifest["source_files"]:
+                self.console.print(f"  🎯 [cyan]{source_file['key']}[/cyan]")
+        
         results = self._validate_results(self.manifest)
         if not all(r["status"] == "PASS" for r in results):
             self.console.print(
@@ -825,6 +947,9 @@ class E2ETestRunner:
         self.console.log(
             "[green]✓ Initial bundle created and validated successfully.[/green]"
         )
+
+        # Note: bundle_key_1 is now in processed_bundle_keys (added by _consume_and_download)
+        # so it won't be found again in Phase 2
 
         # --- Phase 2: Process Overwritten Version ---
         self.console.print(
@@ -869,6 +994,10 @@ class E2ETestRunner:
         self.console.print(
             "\n--- [bold blue]Key Sanitization Test (S3 Trigger)[/bold blue] ---"
         )
+
+        # Ensure completely clean environment for key sanitization test
+        # This prevents interference from previous test runs
+        self._cleanup_all_bundles()
 
         # 1. Define the keys as they will be uploaded to S3.
         input_safe_key = f"{self.s3_prefix}/safe_file.txt"
@@ -955,6 +1084,10 @@ class E2ETestRunner:
             "\n--- [bold blue]File Not Found Resilience Test[/bold blue] ---"
         )
 
+        # Ensure completely clean environment for file not found test
+        # This prevents interference from previous test runs
+        self._cleanup_all_bundles()
+
         # 1. Use the standard producer to upload the initial batch of files.
         #    This gives us a manifest of all files that were created.
         initial_manifest = self._produce_and_upload()
@@ -1025,6 +1158,10 @@ class E2ETestRunner:
         self.console.print(
             "\n--- [bold blue]Partial Batch Failure & SQS Retry Test[/bold blue] ---"
         )
+
+        # Ensure completely clean environment for partial batch failure test
+        # This prevents interference from previous test runs
+        self._cleanup_all_bundles()
 
         # 1. Produce all files and create the full manifest of what we expect
         #    to find at the end of the entire process.

@@ -362,11 +362,28 @@ def handler(event: dict, context: LambdaContext) -> PartialItemFailureResponse:
             for sqs_record in sqs_records
             if sqs_record.get("body")
         )
+        
+        # Extract S3 keys for debugging purposes
+        s3_keys = []
+        for sqs_record in sqs_records:
+            try:
+                if sqs_record.get("body"):
+                    s3_event = json.loads(sqs_record["body"])
+                    s3_records = s3_event.get("Records", [])
+                    for s3_record in s3_records:
+                        bucket_name = s3_record.get("s3", {}).get("bucket", {}).get("name", "unknown-bucket")
+                        object_key = s3_record.get("s3", {}).get("object", {}).get("key", "unknown-key")
+                        s3_keys.append(f"{bucket_name}/{object_key}")
+            except (json.JSONDecodeError, KeyError, AttributeError):
+                # Skip malformed records for key extraction, they'll be handled in main processing
+                continue
+        
         logger.info(
             "Starting SQS batch processing",
             extra={
                 "sqs_messages": len(sqs_records),
                 "total_s3_records": total_s3_records,
+                "s3_keys": s3_keys,
                 "request_id": context.aws_request_id,
             },
         )

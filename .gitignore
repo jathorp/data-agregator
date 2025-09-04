@@ -66,6 +66,13 @@ venv/
 # Build artifacts for Lambda
 lambda_layers/
 
+# Test results (should not be committed)
+e2e_tests/results_*.xml
+e2e_tests/junit_results.xml
+
+# Build artifacts (should not be committed)
+dist/
+
 # ======================================================================================
 # A Note on .terraform.lock.hcl
 #

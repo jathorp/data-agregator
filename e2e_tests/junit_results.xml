@@ -1,4 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<testsuite name="DataAggregatorE2ETest" tests="1" failures="0">
-  <testcase name="data/e2e-test-6ea18a67/source_file_0001.bin" classname="E2EFileValidation" />
-</testsuite>

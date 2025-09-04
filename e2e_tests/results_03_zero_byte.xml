@@ -1,8 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<testsuite name="DataAggregatorE2ETest" tests="5" failures="0">
-  <testcase name="data/e2e-test-e82f1ed4/source_file_0001.bin" classname="E2EFileValidation" />
-  <testcase name="data/e2e-test-e82f1ed4/source_file_0002.bin" classname="E2EFileValidation" />
-  <testcase name="data/e2e-test-e82f1ed4/source_file_0003.bin" classname="E2EFileValidation" />
-  <testcase name="data/e2e-test-e82f1ed4/source_file_0004.bin" classname="E2EFileValidation" />
-  <testcase name="data/e2e-test-e82f1ed4/source_file_0005.bin" classname="E2EFileValidation" />
-</testsuite>

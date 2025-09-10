@@ -20,6 +20,10 @@ uv run pytest tests/unit/
 # Run E2E tests (must be run from e2e_tests/ directory)
 cd e2e_tests && python main.py --config configs/config_00_singe_file.json
 
+# Validate e2e test improvements (no AWS credentials required)
+cd e2e_tests && uv run python test_idempotency_fix.py
+cd e2e_tests && uv run python test_bundle_diagnostics.py
+
 # Install dependencies
 uv sync
 
@@ -34,6 +38,8 @@ uv run mypy src/data_aggregator/
 - **Memory Management**: [`src/data_aggregator/core.py`](src/data_aggregator/core.py) uses SpooledTemporaryFile to handle Lambda's 512MB memory limit efficiently
 - **Idempotency**: [`src/data_aggregator/app.py:91`](src/data_aggregator/app.py:91) generates collision-proof keys using S3 object metadata
 - **Graceful Processing**: Core bundling monitors Lambda timeout and stops processing new files when time is low
+- **Security Sanitization**: [`src/data_aggregator/security.py`](src/data_aggregator/security.py) provides S3 key sanitization to prevent path traversal attacks
+- **S3 Client Abstraction**: [`src/data_aggregator/clients.py`](src/data_aggregator/clients.py) provides reusable S3 operations with error handling
 
 ## Testing Requirements
 
@@ -41,6 +47,9 @@ uv run mypy src/data_aggregator/
 - **Test Isolation**: Different S3 prefixes prevent conflicts (`direct-invoke-tests/` vs `data/`)
 - **Direct Lambda Testing**: Use `{"e2e_test_direct_invoke": True}` to bypass SQS for testing
 - **Environment Variables**: Unit tests require specific env vars defined in `pyproject.toml`
+- **Enhanced Debugging**: E2E tests include comprehensive bundle processing diagnostics and verbose logging
+- **Test Environment Cleanup**: Idempotency and security tests use complete bundle cleanup to prevent contamination
+- **Diagnostic Tools**: Use `test_bundle_diagnostics.py` and `test_idempotency_fix.py` to validate improvements without AWS credentials
 
 ## Important Conventions
 

@@ -4,6 +4,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .config import Config
+from .region_utils import create_boto3_clients_with_region_detection
 
 
 def verify_aws_connectivity(config: Config):
@@ -18,13 +19,11 @@ def verify_aws_connectivity(config: Config):
     console.print("\n--- [bold blue]Pre-flight Checks[/bold blue] ---")
 
     try:
-        # 1. Create a session using the provided config. This is where
-        #    NoCredentialsError or NoRegionError will most likely occur.
-        session_args = {}
-
-        session = boto3.Session(**session_args)
-        s3_client = session.client("s3")
-        console.log("[green]✓[/green] Boto3 S3 session initialized successfully.")
+        # 1. Create clients with automatic region detection.
+        #    This will detect the bucket region and use it for all clients.
+        bucket_names = [config.landing_bucket, config.distribution_bucket]
+        session, s3_client, lambda_client, detected_region = create_boto3_clients_with_region_detection(bucket_names)
+        console.log(f"[green]✓[/green] Boto3 clients initialized successfully using region '{detected_region}'.")
 
         # 2. Check S3 bucket access.
         s3_client.head_bucket(Bucket=config.landing_bucket)
@@ -44,7 +43,7 @@ def verify_aws_connectivity(config: Config):
                     "'lambda_function_name' is required for this test type."
                 )
 
-            lambda_client = session.client("lambda")
+            # Lambda client already created with region detection above
             lambda_client.get_function_configuration(
                 FunctionName=config.lambda_function_name
             )

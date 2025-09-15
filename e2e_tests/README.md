@@ -23,7 +23,73 @@ While unit tests validate individual functions in isolation, these E2E tests val
     pip install -r requirements.txt
     ```
 
-## 🚀 How to Run Tests
+## 🔧 AWS Configuration Requirements
+
+The e2e tests require valid AWS credentials and include **automatic region detection** that works seamlessly with various AWS credential setups, including AWS Lab environments.
+
+### 🎯 Automatic Region Detection
+
+The e2e tests now include smart region detection that:
+- **Automatically detects** the region of your S3 buckets using the `GetBucketLocation` API
+- **Falls back** to `us-east-1` as a sensible default if detection fails
+- **Works seamlessly** with AWS Lab credentials and SSO setups that don't have a region configured
+- **Eliminates** the "You must specify a region" error for boto3 clients
+
+### Supported Configuration Methods
+
+Configure your AWS credentials using any of these methods:
+
+#### 1. Environment Variables
+```bash
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+# Region is automatically detected - no need to set AWS_REGION
+```
+
+#### 2. AWS CLI Configuration
+```bash
+aws configure
+# You can leave the region blank - it will be auto-detected from your buckets
+```
+
+#### 3. AWS Credentials File
+Create or update `~/.aws/credentials`:
+```ini
+[default]
+aws_access_key_id = your_access_key
+aws_secret_access_key = your_secret_key
+```
+
+The `~/.aws/config` file is optional - region will be auto-detected:
+```ini
+[default]
+# region setting is optional - will be auto-detected from buckets
+region = us-east-1
+```
+
+#### 4. AWS Lab/SSO Credentials ✨
+The tests work seamlessly with AWS Lab environments and SSO setups:
+- **No region configuration required** - automatic detection handles this
+- **Compatible with custom credential processes** used by AWS Labs
+- **Graceful fallback** to default region when bucket detection isn't possible
+
+#### 5. IAM Roles (for EC2/ECS)
+If running on AWS infrastructure, attach an appropriate IAM role with S3 and Lambda permissions.
+
+### Verification
+
+To verify your AWS configuration is working:
+```bash
+# This should list your S3 buckets without errors
+aws s3 ls
+
+# The e2e tests will now work even if you don't have a region configured
+cd e2e_tests && python main.py --config configs/config_00_singe_file.json
+```
+
+**Note:** The automatic region detection has eliminated the previous "You must specify a region" error. The tests will now automatically detect the appropriate region from your S3 buckets or use a sensible default.
+
+## � How to Run Tests
 
 All tests are executed via the `main.py` script and driven by JSON configuration files.
 

@@ -50,6 +50,7 @@ uv run mypy src/data_aggregator/
 - **Enhanced Debugging**: E2E tests include comprehensive bundle processing diagnostics and verbose logging
 - **Test Environment Cleanup**: Idempotency and security tests use complete bundle cleanup to prevent contamination
 - **Diagnostic Tools**: Use `test_bundle_diagnostics.py` and `test_idempotency_fix.py` to validate improvements without AWS credentials
+- **Automatic Region Detection**: E2E tests automatically detect S3 bucket regions, compatible with AWS Lab/SSO credentials without region configuration
 
 ## Important Conventions
 

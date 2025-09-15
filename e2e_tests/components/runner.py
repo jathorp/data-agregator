@@ -33,6 +33,7 @@ from .data_generator import (
     DataGenerator,
     RandomDataGenerator,
 )
+from .region_utils import create_boto3_clients_with_region_detection
 
 
 # --- Data Structures ---
@@ -80,10 +81,12 @@ class E2ETestRunner:
             read_timeout=900, connect_timeout=10, retries={"max_attempts": 2}
         )
 
-        # We only need this special config for the Lambda client. The S3 client is fine.
-        self.lambda_client = boto3.client("lambda", config=self.lambda_client_config)
-
-        self.s3 = boto3.client("s3")
+        # Use automatic region detection for all clients.
+        # This will detect the bucket region and use it for all clients.
+        bucket_names = [self.config.landing_bucket, self.config.distribution_bucket]
+        session, self.s3, self.lambda_client, detected_region = create_boto3_clients_with_region_detection(
+            bucket_names, self.lambda_client_config
+        )
         self.console = Console()
         self.manifest: Optional[TestManifest] = None
 
